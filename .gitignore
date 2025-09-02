@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+env/
+
+# PyInstaller
+build/
+dist/
+*.spec
+build_temp/
+final_exe/
+
+# Audio files
+*.wav
+*.mp3
+*.flac
+
+# Transcription output
+*.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+temp_*
+*.tmp
