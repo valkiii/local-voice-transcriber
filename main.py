@@ -13,7 +13,9 @@ from collections import deque
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                            QWidget, QPushButton, QTextEdit, QLabel, QProgressBar,
                            QFileDialog, QComboBox, QGroupBox, QFrame, QMessageBox,
-                           QTabWidget, QScrollArea)
+                           QTabWidget, QScrollArea, QDialog, QDialogButtonBox, 
+                           QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox,
+                           QSplitter)
 try:
     from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
     import torch
@@ -21,6 +23,15 @@ try:
 except ImportError:
     LLM_AVAILABLE = False
     print("LLM dependencies not available. Install transformers and torch for analysis features.")
+
+try:
+    from pyannote.audio import Pipeline
+    from pyannote.core import Segment
+    import torchaudio
+    DIARIZATION_AVAILABLE = True
+except ImportError:
+    DIARIZATION_AVAILABLE = False
+    print("Diarization dependencies not available. Install pyannote.audio for speaker identification.")
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty
 from PyQt6.QtGui import QFont, QPalette, QColor, QPainter, QPen, QBrush, QLinearGradient
 
@@ -117,6 +128,7 @@ class VoiceBall(QWidget):
 
 class TranscriptionWorker(QThread):
     transcription_ready = pyqtSignal(str)
+    segments_ready = pyqtSignal(list)  # Emit segments for diarization
     progress_update = pyqtSignal(int)
     
     def __init__(self, audio_data, sample_rate):
@@ -165,11 +177,25 @@ class TranscriptionWorker(QThread):
             
             self.progress_update.emit(80)
             
-            # Transcribe directly from numpy array (no file needed!)
-            result = self.model.transcribe(audio_float)
+            # Transcribe directly from numpy array with word-level timestamps
+            result = self.model.transcribe(audio_float, word_timestamps=True)
             
             self.progress_update.emit(100)
+            
+            # Emit both text and segments
             self.transcription_ready.emit(result["text"])
+            
+            # Convert segments to our format for diarization
+            segments = []
+            if "segments" in result:
+                for segment in result["segments"]:
+                    segments.append({
+                        'start': segment.get('start', 0),
+                        'end': segment.get('end', 0),
+                        'text': segment.get('text', '')
+                    })
+            
+            self.segments_ready.emit(segments)
         except Exception as e:
             self.transcription_ready.emit(f"Error during transcription: {str(e)}")
 
@@ -209,8 +235,18 @@ class LLMAnalysisWorker(QThread):
             
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            
+            # Handle different tokenizer configurations
             if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
+                if self.tokenizer.eos_token:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+                elif self.tokenizer.unk_token:
+                    self.tokenizer.pad_token = self.tokenizer.unk_token
+                else:
+                    # Add a new pad token
+                    self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            
+            print(f"Tokenizer loaded: pad_token={self.tokenizer.pad_token}, eos_token={self.tokenizer.eos_token}")
             
             # Load model with optimal settings for M1
             self.model = AutoModelForCausalLM.from_pretrained(
@@ -220,6 +256,10 @@ class LLMAnalysisWorker(QThread):
                 device_map="auto" if device == "cuda" else None
             )
             
+            # Resize model embeddings if we added new tokens
+            if len(self.tokenizer) > self.model.config.vocab_size:
+                self.model.resize_token_embeddings(len(self.tokenizer))
+            
             # Move model to optimal device
             if device != "cuda":  # cuda uses device_map="auto"
                 self.model = self.model.to(device)
@@ -228,14 +268,24 @@ class LLMAnalysisWorker(QThread):
             
             self.analysis_ready.emit("status", "Generating summary...")
             
+            # Truncate text if too long to avoid context overflow
+            text_for_analysis = self.text[:2000] + "..." if len(self.text) > 2000 else self.text
+            
             # Generate summary
             summary_prompt = f"""Summarize the following transcript in 2-3 clear sentences. Focus on the main topics discussed.
 
-Transcript: {self.text}
+Transcript: {text_for_analysis}
 
 Summary:"""
             
+            print(f"Generating summary with {self.model_name}...")
             summary = self._generate_response(summary_prompt, max_length=150)
+            print(f"Summary result: '{summary[:100]}...'")
+            
+            if not summary or "Generation failed" in summary:
+                self.analysis_error.emit(f"Summary generation failed with {self.model_name}")
+                return
+                
             self.analysis_ready.emit("summary", summary)
             
             self.analysis_ready.emit("status", "Extracting key points...")
@@ -243,12 +293,19 @@ Summary:"""
             # Generate key points
             key_points_prompt = f"""Extract the main key points from this transcript as a bullet list. Include only the most important ideas.
 
-Transcript: {self.text}
+Transcript: {text_for_analysis}
 
 Key Points:
 •"""
             
-            key_points = "• " + self._generate_response(key_points_prompt, max_length=200)
+            print(f"Generating key points with {self.model_name}...")
+            key_points_response = self._generate_response(key_points_prompt, max_length=200)
+            
+            if key_points_response and "Generation failed" not in key_points_response:
+                key_points = "• " + key_points_response
+            else:
+                key_points = "• Could not extract key points"
+                
             self.analysis_ready.emit("key_points", key_points)
             
             self.analysis_ready.emit("status", "Identifying action items...")
@@ -256,12 +313,19 @@ Key Points:
             # Generate action items
             action_prompt = f"""Identify any action items, tasks, or follow-up items mentioned in this transcript. List them clearly.
 
-Transcript: {self.text}
+Transcript: {text_for_analysis}
 
 Action Items:
 •"""
             
-            actions = "• " + self._generate_response(action_prompt, max_length=200)
+            print(f"Generating actions with {self.model_name}...")
+            actions_response = self._generate_response(action_prompt, max_length=200)
+            
+            if actions_response and "Generation failed" not in actions_response:
+                actions = "• " + actions_response
+            else:
+                actions = "• No specific action items identified"
+                
             self.analysis_ready.emit("actions", actions)
             
             self.analysis_ready.emit("status", "Analysis complete")
@@ -303,32 +367,31 @@ Action Items:
         try:
             import torch
             
+            # Model-specific prompt formatting
+            formatted_prompt = self._format_prompt_for_model(prompt)
+            
             # Tokenize input with attention mask
             inputs = self.tokenizer(
-                prompt, 
+                formatted_prompt, 
                 return_tensors="pt", 
                 padding=True, 
                 truncation=True,
-                max_length=512  # Limit input length for efficiency
+                max_length=1024  # Increased for better context
             )
             
             # Move inputs to same device as model
             device = next(self.model.parameters()).device
             inputs = {key: value.to(device) for key, value in inputs.items()}
             
+            # Model-specific generation parameters
+            generation_params = self._get_generation_params(max_length)
+            
             # Generate response with optimal settings
             with torch.no_grad():
-                # Use torch.inference_mode() for better performance on M1
                 with torch.inference_mode():
                     outputs = self.model.generate(
                         **inputs,
-                        max_new_tokens=max_length,
-                        temperature=0.7,
-                        do_sample=True,
-                        pad_token_id=self.tokenizer.eos_token_id,
-                        eos_token_id=self.tokenizer.eos_token_id,
-                        repetition_penalty=1.1,
-                        use_cache=True  # Enable KV cache for faster generation
+                        **generation_params
                     )
             
             # Decode only the new tokens (skip input)
@@ -336,10 +399,89 @@ Action Items:
             new_tokens = outputs[0][input_length:]
             response = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
             
-            return response.strip()[:500]  # Limit response length
+            # Post-process response
+            response = self._post_process_response(response)
+            
+            return response[:500]  # Limit response length
             
         except Exception as e:
+            print(f"Generation error with {self.model_name}: {str(e)}")
             return f"Generation failed: {str(e)}"
+    
+    def _format_prompt_for_model(self, prompt):
+        """Format prompt according to model requirements"""
+        if "phi-2" in self.model_name.lower():
+            # Phi-2 works better with instruction format
+            return f"Instruction: {prompt}\nResponse:"
+        elif "tinyllama" in self.model_name.lower():
+            # TinyLlama works well with chat format
+            return f"<|system|>\nYou are a helpful assistant.</s>\n<|user|>\n{prompt}</s>\n<|assistant|>\n"
+        elif "qwen" in self.model_name.lower():
+            # Qwen2 works with simple instruction format
+            return f"Human: {prompt}\nAssistant:"
+        else:
+            # Default format
+            return prompt
+    
+    def _get_generation_params(self, max_length):
+        """Get model-specific generation parameters"""
+        base_params = {
+            "max_new_tokens": max_length,
+            "pad_token_id": self.tokenizer.eos_token_id,
+            "eos_token_id": self.tokenizer.eos_token_id,
+            "use_cache": True
+        }
+        
+        if "phi-2" in self.model_name.lower():
+            # Phi-2 specific parameters
+            base_params.update({
+                "temperature": 0.8,
+                "do_sample": True,
+                "top_p": 0.9,
+                "repetition_penalty": 1.2
+            })
+        elif "tinyllama" in self.model_name.lower():
+            # TinyLlama specific parameters
+            base_params.update({
+                "temperature": 0.7,
+                "do_sample": True,
+                "top_p": 0.95,
+                "repetition_penalty": 1.1
+            })
+        elif "qwen" in self.model_name.lower():
+            # Qwen2 specific parameters
+            base_params.update({
+                "temperature": 0.7,
+                "do_sample": True,
+                "top_p": 0.8,
+                "repetition_penalty": 1.1
+            })
+        else:
+            # Default parameters
+            base_params.update({
+                "temperature": 0.7,
+                "do_sample": True,
+                "repetition_penalty": 1.1
+            })
+        
+        return base_params
+    
+    def _post_process_response(self, response):
+        """Clean up model response"""
+        response = response.strip()
+        
+        # Remove common artifacts
+        if response.startswith("Response:"):
+            response = response[9:].strip()
+        if response.startswith("Assistant:"):
+            response = response[10:].strip()
+        
+        # Remove incomplete sentences at the end
+        sentences = response.split('.')
+        if len(sentences) > 1 and len(sentences[-1].strip()) < 10:
+            response = '.'.join(sentences[:-1]) + '.'
+        
+        return response
     
     def _fallback_analysis(self):
         """Fallback keyword-based analysis if LLM fails"""
@@ -375,6 +517,89 @@ Action Items:
             
         except Exception as e:
             self.analysis_error.emit(f"Fallback analysis failed: {str(e)}")
+
+
+class DiarizationWorker(QThread):
+    diarization_ready = pyqtSignal(list)  # List of (start, end, speaker, text) tuples
+    diarization_error = pyqtSignal(str)
+    progress_update = pyqtSignal(int)
+    
+    def __init__(self, audio_file_path, transcription_segments=None):
+        super().__init__()
+        self.audio_file_path = audio_file_path
+        self.transcription_segments = transcription_segments or []
+        self.pipeline = None
+    
+    def run(self):
+        if not DIARIZATION_AVAILABLE:
+            self.diarization_error.emit("Diarization dependencies not available. Install pyannote.audio")
+            return
+        
+        try:
+            self.progress_update.emit(10)
+            
+            # Load the pre-trained speaker diarization pipeline
+            # Note: This requires accepting terms of use for pyannote models
+            from pyannote.audio import Pipeline
+            import warnings
+            warnings.filterwarnings("ignore")
+            
+            self.progress_update.emit(30)
+            
+            # Use the default speaker diarization pipeline
+            try:
+                self.pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+            except Exception as e:
+                # Fallback to simple speaker detection if the main model fails
+                self.diarization_error.emit(f"Could not load diarization model: {str(e)}")
+                return
+            
+            self.progress_update.emit(50)
+            
+            # Apply the pipeline to the audio file
+            diarization = self.pipeline(self.audio_file_path)
+            
+            self.progress_update.emit(80)
+            
+            # Convert diarization results to our format
+            speaker_segments = []
+            for turn, _, speaker in diarization.itertracks(yield_label=True):
+                start_time = turn.start
+                end_time = turn.end
+                speaker_id = speaker
+                
+                # Find matching transcription text for this time segment
+                matching_text = self._find_matching_text(start_time, end_time)
+                
+                speaker_segments.append({
+                    'start': start_time,
+                    'end': end_time,
+                    'speaker': speaker_id,
+                    'text': matching_text
+                })
+            
+            self.progress_update.emit(100)
+            self.diarization_ready.emit(speaker_segments)
+            
+        except Exception as e:
+            self.diarization_error.emit(f"Diarization failed: {str(e)}")
+    
+    def _find_matching_text(self, start_time, end_time):
+        """Find transcription text that matches the speaker segment timing"""
+        if not self.transcription_segments:
+            return ""
+        
+        matching_texts = []
+        for segment in self.transcription_segments:
+            # Check if segment overlaps with speaker time
+            seg_start = segment.get('start', 0)
+            seg_end = segment.get('end', 0)
+            
+            # If segments overlap, include the text
+            if (seg_start <= end_time and seg_end >= start_time):
+                matching_texts.append(segment.get('text', ''))
+        
+        return ' '.join(matching_texts).strip()
 
 
 class LiveTranscriptionWorker(QThread):
@@ -483,6 +708,149 @@ class LiveTranscriptionWorker(QThread):
         self.wait()
 
 
+class SpeakerEditDialog(QDialog):
+    def __init__(self, speaker_segments, parent=None):
+        super().__init__(parent)
+        self.speaker_segments = speaker_segments
+        self.speaker_names = {}
+        self.init_ui()
+    
+    def init_ui(self):
+        self.setWindowTitle("Edit Speaker Names")
+        self.setModal(True)
+        self.resize(600, 400)
+        
+        layout = QVBoxLayout(self)
+        
+        # Instructions
+        instructions = QLabel("Edit speaker names below. Changes will be applied to the transcription.")
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("color: #ff00ff; margin-bottom: 10px; font-size: 11pt;")
+        layout.addWidget(instructions)
+        
+        # Table for speaker editing
+        self.table = QTableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["Time", "Original ID", "Speaker Name", "Preview"])
+        
+        # Populate table with unique speakers
+        unique_speakers = {}
+        for segment in self.speaker_segments:
+            speaker_id = segment['speaker']
+            if speaker_id not in unique_speakers:
+                unique_speakers[speaker_id] = {
+                    'first_appearance': segment['start'],
+                    'sample_text': segment['text'][:50] + "..." if len(segment['text']) > 50 else segment['text']
+                }
+        
+        self.table.setRowCount(len(unique_speakers))
+        
+        row = 0
+        for speaker_id, info in unique_speakers.items():
+            # Time column
+            time_item = QTableWidgetItem(f"{info['first_appearance']:.1f}s")
+            time_item.setFlags(time_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(row, 0, time_item)
+            
+            # Original ID column
+            id_item = QTableWidgetItem(speaker_id)
+            id_item.setFlags(id_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(row, 1, id_item)
+            
+            # Speaker name column (editable)
+            name_item = QTableWidgetItem(f"Speaker {row + 1}")
+            self.table.setItem(row, 2, name_item)
+            self.speaker_names[speaker_id] = f"Speaker {row + 1}"
+            
+            # Preview column
+            preview_item = QTableWidgetItem(info['sample_text'])
+            preview_item.setFlags(preview_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(row, 3, preview_item)
+            
+            row += 1
+        
+        # Auto-resize columns
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        
+        # Connect cell changes
+        self.table.cellChanged.connect(self.on_cell_changed)
+        
+        # Style the table
+        self.table.setStyleSheet("""
+            QTableWidget {
+                background-color: #1a1a1a;
+                color: #ffffff;
+                border: 1px solid #555;
+                border-radius: 6px;
+                selection-background-color: rgba(255, 0, 255, 0.3);
+            }
+            QTableWidget::item {
+                padding: 8px;
+                border: none;
+            }
+            QTableWidget::item:selected {
+                background-color: rgba(255, 0, 255, 0.2);
+            }
+            QHeaderView::section {
+                background-color: #2a2a2a;
+                color: #ff00ff;
+                padding: 8px;
+                border: none;
+                font-weight: bold;
+            }
+        """)
+        
+        layout.addWidget(self.table)
+        
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        button_box.setStyleSheet("""
+            QPushButton {
+                background: #3a3a3a;
+                border: 1px solid #555;
+                border-radius: 6px;
+                color: #ffffff;
+                font-weight: bold;
+                padding: 8px 16px;
+                margin: 2px;
+            }
+            QPushButton:hover {
+                background: #4a4a4a;
+                border-color: #666;
+            }
+        """)
+        
+        layout.addWidget(button_box)
+        
+        # Set dialog style
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #0a0a0a;
+                color: #ff00ff;
+            }
+            QLabel {
+                color: #ff00ff;
+            }
+        """)
+    
+    def on_cell_changed(self, row, column):
+        if column == 2:  # Speaker name column
+            original_id = self.table.item(row, 1).text()
+            new_name = self.table.item(row, 2).text()
+            self.speaker_names[original_id] = new_name
+    
+    def get_speaker_names(self):
+        return self.speaker_names
+
+
 class VoiceTranscriberApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -501,6 +869,11 @@ class VoiceTranscriberApp(QMainWindow):
         self.current_transcription_text = ""
         self.selected_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"  # Default model
         self.live_text_sentences = []  # Store live transcription sentences
+        self.diarization_worker = None
+        self.speaker_segments = []  # Store speaker diarization results
+        self.transcription_segments = []  # Store transcription segments with timing
+        self.diarization_enabled = True
+        self.last_audio_file = None  # Path to last saved audio file
         
         self.init_ui()
         self.init_audio()
@@ -721,8 +1094,71 @@ class VoiceTranscriberApp(QMainWindow):
         """)
         analysis_controls.addWidget(self.load_button)
         
+        # Diarization controls
+        diarization_layout = QHBoxLayout()
+        
+        self.diarization_checkbox = QCheckBox("Enable Speaker Diarization")
+        self.diarization_checkbox.setChecked(DIARIZATION_AVAILABLE and self.diarization_enabled)
+        self.diarization_checkbox.setEnabled(DIARIZATION_AVAILABLE)
+        self.diarization_checkbox.stateChanged.connect(self.on_diarization_toggle)
+        self.diarization_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #ffffff;
+                font-size: 10pt;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 2px solid #555;
+                border-radius: 3px;
+                background: #2a2a2a;
+            }
+            QCheckBox::indicator:checked {
+                background: #ff00ff;
+                border-color: #ff00ff;
+            }
+            QCheckBox::indicator:checked:disabled {
+                background: #666;
+                border-color: #666;
+            }
+        """)
+        
+        self.edit_speakers_button = QPushButton("👥 Edit Speakers")
+        self.edit_speakers_button.setEnabled(False)
+        self.edit_speakers_button.clicked.connect(self.edit_speakers)
+        self.edit_speakers_button.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #9C27B0, stop:1 #7B1FA2);
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 9pt;
+                margin: 2px 0px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #AB47BC, stop:1 #8E24AA);
+            }
+            QPushButton:disabled {
+                background: #666;
+                color: #999;
+            }
+        """)
+        
+        diarization_layout.addWidget(self.diarization_checkbox)
+        diarization_layout.addStretch()
+        diarization_layout.addWidget(self.edit_speakers_button)
+        analysis_controls.addLayout(diarization_layout)
+        
         # Status label
-        self.analysis_status = QLabel("Ready for analysis")
+        status_text = "Ready for analysis"
+        if not DIARIZATION_AVAILABLE:
+            status_text += " • Speaker diarization unavailable (install pyannote.audio)"
+        self.analysis_status = QLabel(status_text)
         self.analysis_status.setFont(QFont("Segoe UI", 9))
         self.analysis_status.setStyleSheet("color: #888; margin-bottom: 10px;")
         self.analysis_status.setWordWrap(True)
@@ -1002,8 +1438,12 @@ class VoiceTranscriberApp(QMainWindow):
                         audio_int16 = audio_data.astype(np.int16)
                     write(backup_audio_path, self.sample_rate, audio_int16)
                     print(f"Audio backup saved: {backup_audio_path}")
+                    
+                    # Store audio file path for diarization
+                    self.last_audio_file = backup_audio_path
                 except Exception as e:
                     print(f"Failed to save audio backup: {e}")
+                    self.last_audio_file = None
                 
                 # Set transcription in progress flag
                 self.transcription_in_progress = True
@@ -1017,6 +1457,7 @@ class VoiceTranscriberApp(QMainWindow):
                 
                 self.transcription_worker = TranscriptionWorker(audio_data, self.sample_rate)
                 self.transcription_worker.transcription_ready.connect(self.on_transcription_ready)
+                self.transcription_worker.segments_ready.connect(self.on_segments_ready)
                 self.transcription_worker.progress_update.connect(self.progress_bar.setValue)
                 self.transcription_worker.start()
             else:
@@ -1126,6 +1567,114 @@ class VoiceTranscriberApp(QMainWindow):
         self.summary_text.setPlainText(f"Error: {error_message}")
         self.key_points_text.setPlainText(f"Error: {error_message}")
         self.action_items_text.setPlainText(f"Error: {error_message}")
+    
+    def on_diarization_toggle(self, state):
+        self.diarization_enabled = state == Qt.CheckState.Checked.value
+    
+    def on_segments_ready(self, segments):
+        """Store transcription segments for diarization"""
+        self.transcription_segments = segments
+        
+        # Start diarization if enabled and we have an audio file
+        if (self.diarization_enabled and DIARIZATION_AVAILABLE and 
+            self.last_audio_file and os.path.exists(self.last_audio_file)):
+            self.start_diarization()
+    
+    def start_diarization(self):
+        """Start speaker diarization process"""
+        if not self.last_audio_file:
+            self.analysis_status.setText("No audio file available for diarization")
+            return
+            
+        self.analysis_status.setText("Starting speaker diarization...")
+        self.diarization_worker = DiarizationWorker(
+            self.last_audio_file, 
+            self.transcription_segments
+        )
+        self.diarization_worker.diarization_ready.connect(self.on_diarization_ready)
+        self.diarization_worker.diarization_error.connect(self.on_diarization_error)
+        self.diarization_worker.progress_update.connect(self.on_diarization_progress)
+        self.diarization_worker.start()
+    
+    def on_diarization_progress(self, progress):
+        """Update status during diarization"""
+        self.analysis_status.setText(f"Diarization progress: {progress}%")
+    
+    def on_diarization_ready(self, speaker_segments):
+        """Handle completed diarization results"""
+        self.speaker_segments = speaker_segments
+        self.edit_speakers_button.setEnabled(True)
+        
+        # Format transcription with speaker labels
+        formatted_text = self.format_transcription_with_speakers(speaker_segments)
+        self.transcription_text.setPlainText(formatted_text)
+        self.current_transcription_text = formatted_text
+        
+        self.analysis_status.setText(f"Diarization complete. Found {len(set(s['speaker'] for s in speaker_segments))} speakers.")
+    
+    def on_diarization_error(self, error_message):
+        """Handle diarization errors"""
+        self.analysis_status.setText(f"Diarization failed: {error_message}")
+        self.edit_speakers_button.setEnabled(False)
+    
+    def format_transcription_with_speakers(self, speaker_segments, speaker_names=None):
+        """Format transcription text with speaker labels"""
+        if not speaker_segments:
+            return self.current_transcription_text
+        
+        formatted_lines = []
+        current_speaker = None
+        current_text = []
+        
+        # Sort segments by start time
+        sorted_segments = sorted(speaker_segments, key=lambda x: x['start'])
+        
+        for segment in sorted_segments:
+            speaker_id = segment['speaker']
+            text = segment['text'].strip()
+            
+            if not text:
+                continue
+            
+            # Get speaker name
+            if speaker_names and speaker_id in speaker_names:
+                speaker_name = speaker_names[speaker_id]
+            else:
+                # Use a more readable default format
+                speaker_name = f"Speaker {speaker_id.split('_')[-1] if '_' in speaker_id else speaker_id}"
+            
+            if speaker_id != current_speaker:
+                # New speaker, save previous and start new
+                if current_speaker and current_text:
+                    formatted_lines.append(f"{current_speaker}: {' '.join(current_text)}")
+                current_speaker = speaker_name
+                current_text = [text]
+            else:
+                # Same speaker, continue
+                current_text.append(text)
+        
+        # Add the last speaker's text
+        if current_speaker and current_text:
+            formatted_lines.append(f"{current_speaker}: {' '.join(current_text)}")
+        
+        return '\n\n'.join(formatted_lines)
+    
+    def edit_speakers(self):
+        """Open dialog to edit speaker names"""
+        if not self.speaker_segments:
+            QMessageBox.information(self, "No Speakers", "No speaker information available to edit.")
+            return
+        
+        dialog = SpeakerEditDialog(self.speaker_segments, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            speaker_names = dialog.get_speaker_names()
+            
+            # Update the transcription with new speaker names
+            formatted_text = self.format_transcription_with_speakers(self.speaker_segments, speaker_names)
+            self.transcription_text.setPlainText(formatted_text)
+            self.current_transcription_text = formatted_text
+            
+            self.analysis_status.setText("Speaker names updated successfully.")
     
     def on_transcription_ready(self, text):
         self.progress_bar.setVisible(False)
