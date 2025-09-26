@@ -33,7 +33,7 @@ except ImportError:
     DIARIZATION_AVAILABLE = False
     print("Diarization dependencies not available. Install pyannote.audio for speaker identification.")
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty
-from PyQt6.QtGui import QFont, QPalette, QColor, QPainter, QPen, QBrush, QLinearGradient
+from PyQt6.QtGui import QFont, QPalette, QColor, QPainter, QPen, QBrush, QLinearGradient, QIcon
 
 
 class VoiceBall(QWidget):
@@ -995,6 +995,11 @@ class VoiceTranscriberApp(QMainWindow):
     def init_ui(self):
         self.setWindowTitle("Voice Transcriber with AI Analysis")
         self.setGeometry(100, 100, 1200, 800)
+        
+        # Set application icon
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
         
         # Central widget with dark theme
         central_widget = QWidget()
@@ -1985,6 +1990,11 @@ def main():
     # Set application properties
     app.setApplicationName("Voice Transcriber")
     app.setApplicationVersion("1.0")
+    
+    # Set application icon
+    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     
     window = VoiceTranscriberApp()
     window.show()
