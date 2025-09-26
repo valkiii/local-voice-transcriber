@@ -1096,6 +1096,28 @@ class VoiceTranscriberApp(QMainWindow):
         """)
         analysis_controls.addWidget(self.load_button)
         
+        # Load audio file button
+        self.load_audio_button = QPushButton("🎵 Load Audio File")
+        self.load_audio_button.clicked.connect(self.load_audio_file)
+        self.load_audio_button.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #4CAF50, stop:1 #45a049);
+                color: white;
+                border: none;
+                padding: 8px 15px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 10pt;
+                margin: 2px 0px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #5CBF60, stop:1 #55b059);
+            }
+        """)
+        analysis_controls.addWidget(self.load_audio_button)
+        
         # Diarization controls
         diarization_layout = QHBoxLayout()
         
@@ -1539,6 +1561,84 @@ class VoiceTranscriberApp(QMainWindow):
                     
             except Exception as e:
                 self.analysis_status.setText(f"Error loading file: {str(e)}")
+    
+    def load_audio_file(self):
+        """Load an audio file and transcribe it"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Audio File",
+            self.output_directory,
+            "Audio files (*.wav *.mp3 *.m4a *.flac *.ogg);;WAV files (*.wav);;All files (*.*)"
+        )
+        
+        if file_path:
+            try:
+                self.analysis_status.setText("Loading audio file...")
+                
+                # Import librosa for loading different audio formats
+                try:
+                    import librosa
+                    import soundfile as sf
+                    LIBROSA_AVAILABLE = True
+                except ImportError:
+                    LIBROSA_AVAILABLE = False
+                
+                # Load audio file
+                if LIBROSA_AVAILABLE:
+                    # Use librosa for better format support
+                    audio_data, sample_rate = librosa.load(file_path, sr=None, mono=True)
+                    # Convert to the format expected by our transcription worker
+                    audio_data = audio_data.astype(np.float32)
+                else:
+                    # Fallback: try to load with scipy for WAV files
+                    from scipy.io import wavfile
+                    sample_rate, audio_data = wavfile.read(file_path)
+                    
+                    # Convert to float32 and normalize
+                    if audio_data.dtype == np.int16:
+                        audio_data = audio_data.astype(np.float32) / 32768.0
+                    elif audio_data.dtype == np.int32:
+                        audio_data = audio_data.astype(np.float32) / 2147483648.0
+                    else:
+                        audio_data = audio_data.astype(np.float32)
+                    
+                    # Handle stereo -> mono conversion
+                    if len(audio_data.shape) > 1:
+                        audio_data = np.mean(audio_data, axis=1)
+                
+                # Store the audio file path for diarization
+                self.last_audio_file = file_path
+                
+                # Set up UI for transcription
+                filename = os.path.basename(file_path)
+                self.analysis_status.setText(f"Loaded: {filename} - Starting transcription...")
+                self.transcription_text.setPlainText("Transcribing audio file...")
+                
+                # Start transcription process
+                self.transcription_in_progress = True
+                self.processing_label.setText("⚙️ Transcribing audio file...")
+                self.processing_label.setVisible(True)
+                self.progress_bar.setVisible(True)
+                self.progress_bar.setValue(0)
+                
+                # Create and start transcription worker
+                self.transcription_worker = TranscriptionWorker(audio_data, sample_rate)
+                self.transcription_worker.transcription_ready.connect(self.on_transcription_ready)
+                self.transcription_worker.segments_ready.connect(self.on_segments_ready)
+                self.transcription_worker.progress_update.connect(self.progress_bar.setValue)
+                self.transcription_worker.start()
+                
+                # Clear previous analysis results
+                self.summary_text.setPlainText("Analysis will appear here after transcription completes...")
+                self.key_points_text.setPlainText("Key points will appear here after analysis...")
+                self.action_items_text.setPlainText("Action items will appear here after analysis...")
+                
+            except ImportError:
+                self.analysis_status.setText("Install librosa for better audio format support: pip install librosa soundfile")
+            except Exception as e:
+                self.analysis_status.setText(f"Error loading audio file: {str(e)}")
+                self.processing_label.setVisible(False)
+                self.progress_bar.setVisible(False)
     
     def on_analysis_ready(self, analysis_type, result):
         if analysis_type == "summary":
