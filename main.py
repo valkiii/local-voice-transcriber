@@ -178,7 +178,7 @@ class LLMAnalysisWorker(QThread):
     analysis_ready = pyqtSignal(str, str)  # analysis_type, result
     analysis_error = pyqtSignal(str)
     
-    def __init__(self, text, model_name="google/gemma-2b-it"):
+    def __init__(self, text, model_name="TinyLlama/TinyLlama-1.1B-Chat-v1.0"):
         super().__init__()
         self.text = text
         self.model_name = model_name
@@ -192,6 +192,12 @@ class LLMAnalysisWorker(QThread):
             
         try:
             self.analysis_ready.emit("status", f"Loading {self.model_name}...")
+            
+            # Check if using keyword-only analysis
+            if self.model_name == "keyword-only":
+                self.analysis_ready.emit("status", "Using keyword-based analysis")
+                self._fallback_analysis()
+                return
             
             # Load the selected model
             from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -493,7 +499,7 @@ class VoiceTranscriberApp(QMainWindow):
         self.last_recorded_audio = None  # Backup of last recording
         self.llm_worker = None
         self.current_transcription_text = ""
-        self.selected_model = "google/gemma-2b-it"  # Default model
+        self.selected_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"  # Default model
         self.live_text_sentences = []  # Store live transcription sentences
         
         self.init_ui()
@@ -646,9 +652,10 @@ class VoiceTranscriberApp(QMainWindow):
         model_label.setFont(QFont("Segoe UI", 10))
         
         self.model_combo = QComboBox()
-        self.model_combo.addItem("Gemma 2B (Fast)", "google/gemma-2b-it")
-        self.model_combo.addItem("Qwen 1.5B (Faster)", "Qwen/Qwen1.5-1.8B-Chat")
-        self.model_combo.addItem("Gemma 7B (Better)", "google/gemma-7b-it")
+        self.model_combo.addItem("TinyLlama 1.1B (Fastest)", "TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+        self.model_combo.addItem("Phi-2 2.7B (Fast)", "microsoft/phi-2")
+        self.model_combo.addItem("Qwen2 0.5B (Ultra-Fast)", "Qwen/Qwen2-0.5B-Instruct")
+        self.model_combo.addItem("Keyword Analysis (No Download)", "keyword-only")
         self.model_combo.currentIndexChanged.connect(self.on_model_changed)
         self.model_combo.setStyleSheet("""
             QComboBox {
@@ -691,6 +698,28 @@ class VoiceTranscriberApp(QMainWindow):
             }
         """)
         analysis_controls.addWidget(self.analyze_button)
+        
+        # Load transcription button
+        self.load_button = QPushButton("📁 Load Transcription")
+        self.load_button.clicked.connect(self.load_transcription_file)
+        self.load_button.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #FF6B35, stop:1 #E55A2B);
+                color: white;
+                border: none;
+                padding: 8px 15px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 10pt;
+                margin: 2px 0px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #FF7B45, stop:1 #F56A3B);
+            }
+        """)
+        analysis_controls.addWidget(self.load_button)
         
         # Status label
         self.analysis_status = QLabel("Ready for analysis")
@@ -860,7 +889,7 @@ class VoiceTranscriberApp(QMainWindow):
         if self.transcription_in_progress and not self.recording:
             reply = QMessageBox.question(self, 
                 'Transcription in Progress', 
-                'A transcription is currently being processed. Starting a new recording will not affect it.\n\nDo you want to start a new recording?',
+                'A transcription is currently being processed. Starting a new recording will not affect it.\\n\\nDo you want to start a new recording?',
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No)
             
@@ -920,7 +949,10 @@ class VoiceTranscriberApp(QMainWindow):
         
         # Send to live transcription worker
         if self.live_transcription_worker and self.live_transcription_enabled:
-            self.live_transcription_worker.add_audio_chunk(indata.copy())\n            # Debug: occasionally print that we're sending audio to live worker\n            if len(self.recorded_data) % 100 == 0:\n                print(f\"🎤 Sent audio chunk to live worker (total chunks: {len(self.recorded_data)})\")
+            self.live_transcription_worker.add_audio_chunk(indata.copy())
+            # Debug: occasionally print that we're sending audio to live worker
+            if len(self.recorded_data) % 100 == 0:
+                print(f"🎤 Sent audio chunk to live worker (total chunks: {len(self.recorded_data)})")
         
         # Update voice ball
         volume_norm = np.linalg.norm(indata) * 10
@@ -1039,6 +1071,42 @@ class VoiceTranscriberApp(QMainWindow):
         self.llm_worker.analysis_ready.connect(self.on_analysis_ready)
         self.llm_worker.analysis_error.connect(self.on_analysis_error)
         self.llm_worker.start()
+    
+    def load_transcription_file(self):
+        """Load a previous transcription file for analysis"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Transcription File",
+            self.output_directory,
+            "Text files (*.txt);;All files (*.*)"
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                
+                if content:
+                    # Load into final transcription area
+                    self.transcription_text.setPlainText(content)
+                    self.current_transcription_text = content
+                    
+                    # Enable analyze button
+                    self.analyze_button.setEnabled(True)
+                    
+                    # Update status
+                    filename = os.path.basename(file_path)
+                    self.analysis_status.setText(f"Loaded: {filename} - Ready for analysis")
+                    
+                    # Clear previous analysis results
+                    self.summary_text.setPlainText("Analysis will appear here after clicking 'Analyze Content'...")
+                    self.key_points_text.setPlainText("Key points will appear here after analysis...")
+                    self.action_items_text.setPlainText("Action items will appear here after analysis...")
+                else:
+                    self.analysis_status.setText("Error: File is empty")
+                    
+            except Exception as e:
+                self.analysis_status.setText(f"Error loading file: {str(e)}")
     
     def on_analysis_ready(self, analysis_type, result):
         if analysis_type == "summary":

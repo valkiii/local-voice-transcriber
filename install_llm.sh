@@ -41,8 +41,9 @@ try:
     import torch
     
     models = [
-        'google/gemma-2b-it',
-        'Qwen/Qwen1.5-1.8B-Chat'
+        'TinyLlama/TinyLlama-1.1B-Chat-v1.0',
+        'microsoft/phi-2',
+        'Qwen/Qwen2-0.5B-Instruct'
     ]
     
     for model_name in models:
