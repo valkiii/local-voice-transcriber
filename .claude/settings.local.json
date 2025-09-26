@@ -10,9 +10,23 @@
       "Bash(./run.sh)",
       "Bash(rm:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(cat:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(zip:*)",
+      "Bash(grep:*)",
+      "Bash(gh pr:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(git push:*)",
+      "Bash(sed:*)",
+      "Bash(pkill:*)"
     ],
     "deny": [],
-    "ask": []
+    "ask": [],
+    "defaultMode": "acceptEdits",
+    "additionalDirectories": [
+      "/private/tmp"
+    ]
   }
 }

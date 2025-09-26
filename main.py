@@ -3,6 +3,7 @@ import os
 import threading
 import queue
 import math
+import gc
 from datetime import datetime
 import numpy as np
 import sounddevice as sd
@@ -131,19 +132,21 @@ class TranscriptionWorker(QThread):
     segments_ready = pyqtSignal(list)  # Emit segments for diarization
     progress_update = pyqtSignal(int)
     
-    def __init__(self, audio_data, sample_rate):
+    def __init__(self, audio_data, sample_rate, model=None):
         super().__init__()
         self.audio_data = audio_data
         self.sample_rate = sample_rate
-        self.model = None
+        self.model = model
     
     def run(self):
         try:
             self.progress_update.emit(20)
             if self.model is None:
                 try:
-                    # Try to load the model with error handling
-                    self.model = whisper.load_model("base")
+                    # Load model with safer settings to prevent crashes
+                    import torch
+                    # Force CPU usage to avoid GPU memory issues
+                    self.model = whisper.load_model("base", device="cpu")
                     if self.model is None:
                         raise Exception("Failed to load Whisper model")
                 except Exception as e:
@@ -177,25 +180,38 @@ class TranscriptionWorker(QThread):
             
             self.progress_update.emit(80)
             
-            # Transcribe directly from numpy array 
-            # Use simpler settings for loaded files to prevent crashes
-            if len(audio_float) > 16000 * 60:  # More than 1 minute
-                # Safer settings for long audio
+            # Transcribe directly from numpy array with safe settings
+            # Always use safe settings to prevent segmentation faults
+            try:
+                # Limit audio length to prevent memory issues
+                max_duration = 300  # 5 minutes max to prevent crashes
+                max_samples = max_duration * 16000
+                if len(audio_float) > max_samples:
+                    audio_float = audio_float[:max_samples]
+                    
                 result = self.model.transcribe(
-                    audio_float, 
-                    word_timestamps=False,  # Disable word timestamps for stability
-                    fp16=False,  # Use FP32 for stability
-                    temperature=0.0,  # More deterministic
-                    no_speech_threshold=0.3
+                    audio_float,
+                    fp16=False,  # Always use FP32 for stability
+                    verbose=False,  # Reduce output
+                    word_timestamps=False,  # Disable for stability
+                    temperature=0.0,  # Deterministic
+                    compression_ratio_threshold=2.0,  # Lower threshold to catch repetition earlier
+                    logprob_threshold=-0.5,  # Higher threshold to filter low-confidence
+                    no_speech_threshold=0.8,  # Much higher threshold to avoid hallucination
+                    condition_on_previous_text=False,  # Prevent context issues
+                    initial_prompt=""  # No initial prompt to avoid bias
                 )
-            else:
-                # Standard settings for short audio
-                result = self.model.transcribe(audio_float, word_timestamps=True)
+            except Exception as transcribe_error:
+                self.transcription_ready.emit(f"Transcription failed: {str(transcribe_error)}")
+                return
             
             self.progress_update.emit(100)
             
+            # Clean the transcription text for repetitions
+            clean_text = self._clean_repetitive_text(result["text"])
+            
             # Emit both text and segments
-            self.transcription_ready.emit(result["text"])
+            self.transcription_ready.emit(clean_text)
             
             # Convert segments to our format for diarization
             segments = []
@@ -210,6 +226,82 @@ class TranscriptionWorker(QThread):
             self.segments_ready.emit(segments)
         except Exception as e:
             self.transcription_ready.emit(f"Error during transcription: {str(e)}")
+    
+    def _clean_repetitive_text(self, text):
+        """Remove repetitive patterns that indicate Whisper hallucination"""
+        if not text or len(text) < 20:
+            return text
+        
+        # Split into sentences
+        sentences = [s.strip() for s in text.split('.') if s.strip()]
+        if len(sentences) < 2:
+            return text
+        
+        # Detect repetitive patterns
+        cleaned_sentences = []
+        repetition_threshold = 3  # Number of repetitions to trigger cleaning
+        
+        for i, sentence in enumerate(sentences):
+            # Check if this sentence repeats the previous ones
+            if len(cleaned_sentences) >= repetition_threshold:
+                recent_sentences = cleaned_sentences[-repetition_threshold:]
+                # If current sentence is very similar to recent ones, likely repetition
+                if any(self._similarity_ratio(sentence, prev) > 0.8 for prev in recent_sentences):
+                    print(f"Detected repetitive sentence: '{sentence[:50]}...'")
+                    continue
+            
+            # Check for repetitive phrases within the sentence
+            words = sentence.split()
+            if len(words) > 10:
+                # Look for repeated phrases
+                cleaned_words = self._remove_repeated_phrases(words)
+                sentence = ' '.join(cleaned_words)
+            
+            cleaned_sentences.append(sentence)
+        
+        return '. '.join(cleaned_sentences) + ('.' if cleaned_sentences else '')
+    
+    def _similarity_ratio(self, text1, text2):
+        """Calculate similarity ratio between two texts"""
+        if not text1 or not text2:
+            return 0.0
+        
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        intersection = len(words1 & words2)
+        union = len(words1 | words2)
+        
+        return intersection / union if union > 0 else 0.0
+    
+    def _remove_repeated_phrases(self, words):
+        """Remove repeated phrases within a list of words"""
+        if len(words) < 6:
+            return words
+        
+        # Look for patterns of 2-4 words that repeat
+        for phrase_len in range(2, 5):
+            for start in range(len(words) - phrase_len * 2):
+                phrase = words[start:start + phrase_len]
+                
+                # Count how many times this phrase repeats consecutively
+                repeats = 1
+                pos = start + phrase_len
+                
+                while pos + phrase_len <= len(words) and words[pos:pos + phrase_len] == phrase:
+                    repeats += 1
+                    pos += phrase_len
+                
+                # If phrase repeats 3+ times, keep only one instance
+                if repeats >= 3:
+                    # Remove the repeated portions
+                    end_remove = start + phrase_len * repeats
+                    return words[:start + phrase_len] + words[end_remove:]
+        
+        return words
 
 
 class ChunkedTranscriptionWorker(QThread):
@@ -217,21 +309,23 @@ class ChunkedTranscriptionWorker(QThread):
     segments_ready = pyqtSignal(list)  
     progress_update = pyqtSignal(int)
     
-    def __init__(self, audio_data, sample_rate, chunk_duration=300):
+    def __init__(self, audio_data, sample_rate, chunk_duration=300, model=None):
         super().__init__()
         self.audio_data = audio_data
         self.sample_rate = sample_rate
         self.chunk_duration = chunk_duration
-        self.model = None
+        self.model = model
         
     def run(self):
         try:
             self.progress_update.emit(5)
             
-            # Load Whisper model
+            # Use provided model or load new one
             if self.model is None:
                 try:
-                    self.model = whisper.load_model("base")
+                    import torch
+                    # Force CPU usage to prevent crashes
+                    self.model = whisper.load_model("base", device="cpu")
                     if self.model is None:
                         raise Exception("Failed to load Whisper model")
                 except Exception as e:
@@ -240,26 +334,48 @@ class ChunkedTranscriptionWorker(QThread):
             
             self.progress_update.emit(10)
             
-            # Calculate chunks
+            # Calculate chunks with overlap to preserve context
             chunk_samples = int(self.chunk_duration * self.sample_rate)
+            overlap_samples = int(30 * self.sample_rate)  # 30 second overlap
             total_samples = len(self.audio_data)
-            num_chunks = (total_samples + chunk_samples - 1) // chunk_samples
             
-            print(f"Processing {num_chunks} chunks of {self.chunk_duration/60:.1f} minutes each...")
+            # Calculate chunks with overlap
+            chunks = []
+            start = 0
+            chunk_id = 0
+            
+            while start < total_samples:
+                end = min(start + chunk_samples, total_samples)
+                chunks.append({
+                    'id': chunk_id,
+                    'start_sample': start,
+                    'end_sample': end,
+                    'start_time': start / self.sample_rate,
+                    'end_time': end / self.sample_rate
+                })
+                
+                # Move start forward, but with overlap
+                if end >= total_samples:
+                    break
+                start = end - overlap_samples
+                chunk_id += 1
+            
+            print(f"Processing {len(chunks)} overlapping chunks of {self.chunk_duration/60:.1f} minutes each...")
             
             # Process each chunk
             all_text = []
             all_segments = []
             
-            for i in range(num_chunks):
-                start_sample = i * chunk_samples
-                end_sample = min((i + 1) * chunk_samples, total_samples)
+            for chunk_info in chunks:
+                start_sample = chunk_info['start_sample']
+                end_sample = chunk_info['end_sample']
                 chunk_audio = self.audio_data[start_sample:end_sample]
+                chunk_id = chunk_info['id']
                 
                 # Calculate time offset for this chunk
-                time_offset = i * self.chunk_duration
+                time_offset = chunk_info['start_time']
                 
-                print(f"Processing chunk {i+1}/{num_chunks} ({time_offset/60:.1f}-{(time_offset + len(chunk_audio)/self.sample_rate)/60:.1f}min)...")
+                print(f"Processing chunk {chunk_id+1}/{len(chunks)} ({time_offset/60:.1f}-{chunk_info['end_time']/60:.1f}min)...")
                 
                 # Resample chunk to 16kHz if needed
                 if self.sample_rate != 16000:
@@ -267,35 +383,66 @@ class ChunkedTranscriptionWorker(QThread):
                     num_samples = int(len(chunk_audio) * 16000 / self.sample_rate)
                     chunk_audio = scipy.signal.resample(chunk_audio, num_samples)
                 
-                # Transcribe chunk with safe settings
-                result = self.model.transcribe(
-                    chunk_audio, 
-                    word_timestamps=False,  # Disable for stability
-                    fp16=False,
-                    temperature=0.0,
-                    no_speech_threshold=0.6
-                )
+                # Transcribe chunk with settings to prevent hallucination and repetition
+                try:
+                    result = self.model.transcribe(
+                        chunk_audio,
+                        fp16=False,  # Always use FP32 for stability
+                        verbose=False,  # Reduce output
+                        word_timestamps=False,  # Disable for stability
+                        temperature=0.0,  # Deterministic
+                        compression_ratio_threshold=2.0,  # Lower threshold to catch repetition earlier
+                        logprob_threshold=-0.5,  # Higher threshold to filter low-confidence
+                        no_speech_threshold=0.6,  # Moderate threshold
+                        condition_on_previous_text=False,  # Prevent context issues
+                        language="en",  # Force English to prevent language switching
+                        initial_prompt="This is a technical presentation in English."  # Bias toward English
+                    )
+                    
+                    # Post-process to detect and remove repetitive text
+                    chunk_text = result["text"].strip()
+                    chunk_text = self._clean_repetitive_text(chunk_text)
+                    result["text"] = chunk_text
+                    
+                except Exception as chunk_error:
+                    print(f"Chunk transcription error: {chunk_error}")
+                    # Create empty result for failed chunk
+                    result = {"text": "", "segments": []}
                 
                 chunk_text = result["text"].strip()
-                if chunk_text:
+                
+                # For overlapping chunks, only keep the first half of overlapped chunks
+                # (except for the last chunk)
+                if chunk_id < len(chunks) - 1 and chunk_text:
+                    # This chunk overlaps with the next one, so trim the end
+                    sentences = chunk_text.split('.')
+                    if len(sentences) > 2:
+                        # Keep first 75% of sentences to avoid overlap duplication
+                        keep_count = int(len(sentences) * 0.75)
+                        chunk_text = '.'.join(sentences[:keep_count]) + '.'
+                
+                if chunk_text and chunk_text not in all_text:  # Avoid exact duplicates
                     all_text.append(chunk_text)
                 
                 # Process segments with time offset
                 if "segments" in result:
                     for segment in result["segments"]:
-                        adjusted_segment = {
-                            'start': segment.get('start', 0) + time_offset,
-                            'end': segment.get('end', 0) + time_offset,
-                            'text': segment.get('text', '')
-                        }
-                        all_segments.append(adjusted_segment)
+                        seg_start = segment.get('start', 0) + time_offset
+                        # Only include segments from the non-overlapping part
+                        if chunk_id == len(chunks) - 1 or seg_start < time_offset + (self.chunk_duration * 0.75):
+                            adjusted_segment = {
+                                'start': seg_start,
+                                'end': segment.get('end', 0) + time_offset,
+                                'text': segment.get('text', '')
+                            }
+                            all_segments.append(adjusted_segment)
                 
                 # Update progress
-                chunk_progress = 10 + (i + 1) * 85 // num_chunks
+                chunk_progress = 10 + (chunk_id + 1) * 85 // len(chunks)
                 self.progress_update.emit(chunk_progress)
             
-            # Stitch all transcriptions together
-            full_text = ' '.join(all_text)
+            # Stitch all transcriptions together with intelligent merging
+            full_text = self._merge_overlapping_text(all_text)
             
             self.progress_update.emit(100)
             
@@ -308,6 +455,139 @@ class ChunkedTranscriptionWorker(QThread):
         except Exception as e:
             print(f"Chunked transcription error: {str(e)}")
             self.transcription_ready.emit(f"Error during chunked transcription: {str(e)}")
+    
+    def _merge_overlapping_text(self, text_chunks):
+        """Intelligently merge overlapping text chunks"""
+        if not text_chunks:
+            return ""
+        
+        if len(text_chunks) == 1:
+            return text_chunks[0]
+        
+        merged = text_chunks[0]
+        
+        for i in range(1, len(text_chunks)):
+            current_chunk = text_chunks[i]
+            
+            # Find the best merge point by looking for common endings/beginnings
+            merged_words = merged.split()
+            current_words = current_chunk.split()
+            
+            if len(merged_words) < 5 or len(current_words) < 5:
+                # Too short to find overlap, just append
+                merged += " " + current_chunk
+                continue
+            
+            # Look for overlap in the last part of merged and first part of current
+            best_overlap = 0
+            merge_point = len(merged_words)
+            
+            # Check last 20 words of merged against first 20 words of current
+            search_length = min(20, len(merged_words), len(current_words))
+            
+            for overlap_len in range(1, search_length + 1):
+                merged_end = merged_words[-overlap_len:]
+                current_start = current_words[:overlap_len]
+                
+                # Calculate similarity
+                similarity = self._calculate_word_similarity(merged_end, current_start)
+                
+                if similarity > 0.7 and overlap_len > best_overlap:
+                    best_overlap = overlap_len
+                    merge_point = len(merged_words) - overlap_len
+            
+            if best_overlap > 0:
+                # Merge at the overlap point
+                merged = ' '.join(merged_words[:merge_point]) + " " + current_chunk
+            else:
+                # No good overlap found, just append
+                merged += " " + current_chunk
+        
+        return merged
+    
+    def _calculate_word_similarity(self, words1, words2):
+        """Calculate similarity between two word lists"""
+        if len(words1) != len(words2):
+            return 0.0
+        
+        matches = sum(1 for w1, w2 in zip(words1, words2) if w1.lower() == w2.lower())
+        return matches / len(words1) if words1 else 0.0
+    
+    def _clean_repetitive_text(self, text):
+        """Remove repetitive patterns that indicate Whisper hallucination"""
+        if not text or len(text) < 20:
+            return text
+        
+        # Split into sentences
+        sentences = [s.strip() for s in text.split('.') if s.strip()]
+        if len(sentences) < 2:
+            return text
+        
+        # Detect repetitive patterns
+        cleaned_sentences = []
+        repetition_threshold = 3  # Number of repetitions to trigger cleaning
+        
+        for i, sentence in enumerate(sentences):
+            # Check if this sentence repeats the previous ones
+            if len(cleaned_sentences) >= repetition_threshold:
+                recent_sentences = cleaned_sentences[-repetition_threshold:]
+                # If current sentence is very similar to recent ones, likely repetition
+                if any(self._similarity_ratio(sentence, prev) > 0.8 for prev in recent_sentences):
+                    print(f"Detected repetitive sentence: '{sentence[:50]}...'")
+                    continue
+            
+            # Check for repetitive phrases within the sentence
+            words = sentence.split()
+            if len(words) > 10:
+                # Look for repeated phrases
+                cleaned_words = self._remove_repeated_phrases(words)
+                sentence = ' '.join(cleaned_words)
+            
+            cleaned_sentences.append(sentence)
+        
+        return '. '.join(cleaned_sentences) + ('.' if cleaned_sentences else '')
+    
+    def _similarity_ratio(self, text1, text2):
+        """Calculate similarity ratio between two texts"""
+        if not text1 or not text2:
+            return 0.0
+        
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        intersection = len(words1 & words2)
+        union = len(words1 | words2)
+        
+        return intersection / union if union > 0 else 0.0
+    
+    def _remove_repeated_phrases(self, words):
+        """Remove repeated phrases within a list of words"""
+        if len(words) < 6:
+            return words
+        
+        # Look for patterns of 2-4 words that repeat
+        for phrase_len in range(2, 5):
+            for start in range(len(words) - phrase_len * 2):
+                phrase = words[start:start + phrase_len]
+                
+                # Count how many times this phrase repeats consecutively
+                repeats = 1
+                pos = start + phrase_len
+                
+                while pos + phrase_len <= len(words) and words[pos:pos + phrase_len] == phrase:
+                    repeats += 1
+                    pos += phrase_len
+                
+                # If phrase repeats 3+ times, keep only one instance
+                if repeats >= 3:
+                    # Remove the repeated portions
+                    end_remove = start + phrase_len * repeats
+                    return words[:start + phrase_len] + words[end_remove:]
+        
+        return words
 
 
 class LLMAnalysisWorker(QThread):
@@ -656,9 +936,16 @@ class DiarizationWorker(QThread):
             
             self.progress_update.emit(30)
             
-            # Use the default speaker diarization pipeline
+            # Try local-first diarization approaches
             try:
-                self.pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+                # First try older, more accessible model
+                try:
+                    self.pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization@2.1")
+                except:
+                    # If that fails, try even simpler approach with local VAD + clustering
+                    self.diarization_error.emit("Advanced diarization unavailable. Using simple voice activity detection.")
+                    self._use_simple_diarization()
+                    return
             except Exception as e:
                 # Fallback to simple speaker detection if the main model fails
                 self.diarization_error.emit(f"Could not load diarization model: {str(e)}")
@@ -710,6 +997,90 @@ class DiarizationWorker(QThread):
                 matching_texts.append(segment.get('text', ''))
         
         return ' '.join(matching_texts).strip()
+    
+    def _use_simple_diarization(self):
+        """Simple local diarization using basic audio features and clustering"""
+        try:
+            import librosa
+            from sklearn.cluster import KMeans
+            from scipy.signal import find_peaks
+            
+            # Load audio file
+            audio, sr = librosa.load(self.audio_file_path, sr=16000)
+            
+            # Simple voice activity detection using RMS energy
+            frame_length = int(0.025 * sr)  # 25ms frames
+            hop_length = int(0.010 * sr)    # 10ms hop
+            
+            # Compute features for clustering
+            mfccs = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=13, 
+                                       hop_length=hop_length, n_fft=frame_length*2)
+            
+            # Simple energy-based VAD
+            rms = librosa.feature.rms(y=audio, hop_length=hop_length)[0]
+            rms_threshold = np.percentile(rms, 30)  # Bottom 30% is likely silence
+            
+            # Find speech segments
+            speech_frames = rms > rms_threshold
+            
+            # Extract features only from speech frames
+            speech_features = mfccs[:, speech_frames].T
+            
+            if len(speech_features) < 10:
+                # Not enough speech detected
+                self.diarization_error.emit("Not enough speech detected for diarization")
+                return
+            
+            # Cluster speech segments (assume 2-4 speakers)
+            n_speakers = min(4, max(2, len(speech_features) // 100))  # Heuristic
+            kmeans = KMeans(n_clusters=n_speakers, random_state=42, n_init=10)
+            speaker_labels = kmeans.fit_predict(speech_features)
+            
+            # Map back to time segments
+            frame_times = librosa.frames_to_time(np.arange(len(speech_frames)), 
+                                                sr=sr, hop_length=hop_length)
+            speech_times = frame_times[speech_frames]
+            
+            # Create speaker segments
+            segments = []
+            current_speaker = None
+            segment_start = None
+            
+            for i, (time, speaker) in enumerate(zip(speech_times, speaker_labels)):
+                if speaker != current_speaker:
+                    # End previous segment
+                    if current_speaker is not None and segment_start is not None:
+                        text = self._find_matching_text(segment_start, time)
+                        if text.strip():
+                            segments.append({
+                                'start': segment_start,
+                                'end': time,
+                                'speaker': f'SPEAKER_{current_speaker:02d}',
+                                'text': text
+                            })
+                    
+                    # Start new segment
+                    current_speaker = speaker
+                    segment_start = time
+            
+            # Add final segment
+            if current_speaker is not None and segment_start is not None:
+                text = self._find_matching_text(segment_start, speech_times[-1] + 1.0)
+                if text.strip():
+                    segments.append({
+                        'start': segment_start,
+                        'end': speech_times[-1] + 1.0,
+                        'speaker': f'SPEAKER_{current_speaker:02d}',
+                        'text': text
+                    })
+            
+            self.progress_update.emit(100)
+            self.diarization_ready.emit(segments)
+            
+        except ImportError:
+            self.diarization_error.emit("Install scikit-learn and librosa for local diarization: pip install scikit-learn librosa")
+        except Exception as e:
+            self.diarization_error.emit(f"Simple diarization failed: {str(e)}")
 
 
 class LiveTranscriptionWorker(QThread):
@@ -985,12 +1356,27 @@ class VoiceTranscriberApp(QMainWindow):
         self.diarization_enabled = True
         self.last_audio_file = None  # Path to last saved audio file
         
+        # Shared Whisper model to prevent multiple loading (causes crashes)
+        self.shared_whisper_model = None
+        
         self.init_ui()
         self.init_audio()
         
         # Timer for audio level updates (slower for smoother animation)
         self.level_timer = QTimer()
         self.level_timer.timeout.connect(self.update_audio_level)
+    
+    def load_shared_whisper_model(self):
+        """Load the shared Whisper model to prevent multiple model loading crashes"""
+        try:
+            import torch
+            print("Loading Whisper model (this may take a moment)...")
+            # Force CPU usage and safe settings to prevent crashes
+            self.shared_whisper_model = whisper.load_model("base", device="cpu")
+            print("Whisper model loaded successfully")
+        except Exception as e:
+            print(f"Failed to load Whisper model: {e}")
+            self.shared_whisper_model = None
         
     def init_ui(self):
         self.setWindowTitle("Voice Transcriber with AI Analysis")
@@ -1583,7 +1969,11 @@ class VoiceTranscriberApp(QMainWindow):
                 self.progress_bar.setVisible(True)
                 self.progress_bar.setValue(0)
                 
-                self.transcription_worker = TranscriptionWorker(audio_data, self.sample_rate)
+                # Initialize shared model if not already loaded
+                if self.shared_whisper_model is None:
+                    self.load_shared_whisper_model()
+                
+                self.transcription_worker = TranscriptionWorker(audio_data, self.sample_rate, self.shared_whisper_model)
                 self.transcription_worker.transcription_ready.connect(self.on_transcription_ready)
                 self.transcription_worker.segments_ready.connect(self.on_segments_ready)
                 self.transcription_worker.progress_update.connect(self.progress_bar.setValue)
@@ -1790,18 +2180,23 @@ class VoiceTranscriberApp(QMainWindow):
                 self.progress_bar.setVisible(True)
                 self.progress_bar.setValue(0)
                 
+                # Initialize shared model if not already loaded
+                if self.shared_whisper_model is None:
+                    self.load_shared_whisper_model()
+                
                 # Create and start appropriate transcription worker
                 if hasattr(self, 'process_chunked_audio') and self.process_chunked_audio:
                     # Use chunked processing for long audio
                     self.transcription_worker = ChunkedTranscriptionWorker(
                         audio_data, 
                         sample_rate, 
-                        self.chunk_duration
+                        self.chunk_duration,
+                        self.shared_whisper_model
                     )
                     print(f"Using chunked transcription for {duration/60:.1f}min audio file")
                 else:
                     # Use regular processing for short audio
-                    self.transcription_worker = TranscriptionWorker(audio_data, sample_rate)
+                    self.transcription_worker = TranscriptionWorker(audio_data, sample_rate, self.shared_whisper_model)
                     print(f"Using regular transcription for {duration/60:.1f}min audio file")
                 
                 self.transcription_worker.transcription_ready.connect(self.on_transcription_ready)
@@ -1977,10 +2372,28 @@ class VoiceTranscriberApp(QMainWindow):
     def closeEvent(self, event):
         if self.recording:
             self.stop_recording()
-        # Live transcription worker is disabled
+        
+        # Clean up workers
+        if self.transcription_worker and self.transcription_worker.isRunning():
+            self.transcription_worker.terminate()
+            self.transcription_worker.wait()
+        
         if self.llm_worker and self.llm_worker.isRunning():
             self.llm_worker.terminate()
             self.llm_worker.wait()
+        
+        if self.diarization_worker and self.diarization_worker.isRunning():
+            self.diarization_worker.terminate()
+            self.diarization_worker.wait()
+        
+        # Clean up shared model
+        if self.shared_whisper_model is not None:
+            del self.shared_whisper_model
+            self.shared_whisper_model = None
+        
+        # Force garbage collection to prevent memory leaks
+        gc.collect()
+        
         event.accept()
 
 
