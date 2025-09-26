@@ -862,7 +862,7 @@ class VoiceTranscriberApp(QMainWindow):
         self.audio_queue = queue.Queue()
         self.transcription_worker = None
         self.live_transcription_worker = None
-        self.live_transcription_enabled = True
+        self.live_transcription_enabled = False  # Disabled due to stability issues
         self.accumulated_live_text = ""
         self.last_recorded_audio = None  # Backup of last recording
         self.llm_worker = None
@@ -962,24 +962,26 @@ class VoiceTranscriberApp(QMainWindow):
         self.progress_bar.setFixedHeight(8)
         left_layout.addWidget(self.progress_bar)
         
-        # Live transcription display (real-time)
-        live_label = QLabel("Live Transcription:")
+        # Live transcription display (disabled for stability)
+        live_label = QLabel("Live Transcription (Disabled for Stability):")
         live_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        live_label.setVisible(False)  # Hide the label
         left_layout.addWidget(live_label)
         
         self.live_transcription_text = QTextEdit()
         self.live_transcription_text.setFont(QFont("Segoe UI", 12, QFont.Weight.Normal))
         self.live_transcription_text.setMaximumHeight(120)
-        self.live_transcription_text.setPlainText("Live transcription will appear here...")
+        self.live_transcription_text.setPlainText("Live transcription disabled for stability. Final transcription will appear below after recording.")
         self.live_transcription_text.setReadOnly(True)
+        self.live_transcription_text.setVisible(False)  # Hide the text area
         self.live_transcription_text.setStyleSheet("""
             QTextEdit {
-                color: #00ff88;
-                background: rgba(0, 255, 136, 0.1);
-                border: 1px solid rgba(0, 255, 136, 0.3);
+                color: #888;
+                background: rgba(136, 136, 136, 0.1);
+                border: 1px solid rgba(136, 136, 136, 0.3);
                 border-radius: 8px;
                 padding: 15px;
-                selection-background-color: rgba(0, 255, 136, 0.3);
+                selection-background-color: rgba(136, 136, 136, 0.3);
                 selection-color: #ffffff;
             }
         """)
@@ -1351,14 +1353,11 @@ class VoiceTranscriberApp(QMainWindow):
             self.status_label.setText("Recording... Speak now!")
             
             # Clear live transcription display and reset accumulator
-            self.live_transcription_text.setPlainText("Listening...")
+            # Live transcription disabled for stability
             self.live_text_sentences = []
             
-            # Start live transcription worker
-            if self.live_transcription_enabled:
-                self.live_transcription_worker = LiveTranscriptionWorker()
-                self.live_transcription_worker.live_transcription_ready.connect(self.on_live_transcription)
-                self.live_transcription_worker.start()
+            # Live transcription worker disabled to prevent crashes
+            self.live_transcription_worker = None
             
             # Start recording stream
             self.stream = sd.InputStream(
@@ -1383,12 +1382,7 @@ class VoiceTranscriberApp(QMainWindow):
         # Store audio data
         self.recorded_data.append(indata.copy())
         
-        # Send to live transcription worker
-        if self.live_transcription_worker and self.live_transcription_enabled:
-            self.live_transcription_worker.add_audio_chunk(indata.copy())
-            # Debug: occasionally print that we're sending audio to live worker
-            if len(self.recorded_data) % 100 == 0:
-                print(f"🎤 Sent audio chunk to live worker (total chunks: {len(self.recorded_data)})")
+        # Live transcription disabled - no audio chunks sent to prevent crashes
         
         # Update voice ball
         volume_norm = np.linalg.norm(indata) * 10
@@ -1412,10 +1406,7 @@ class VoiceTranscriberApp(QMainWindow):
             self.stream.stop()
             self.stream.close()
             
-            # Stop live transcription worker
-            if self.live_transcription_worker:
-                self.live_transcription_worker.stop_transcription()
-                self.live_transcription_worker = None
+            # Live transcription worker is disabled - nothing to stop
             
             self.voice_ball.set_recording(False)
             self.status_label.setText("Recording stopped")
@@ -1705,8 +1696,7 @@ class VoiceTranscriberApp(QMainWindow):
     def closeEvent(self, event):
         if self.recording:
             self.stop_recording()
-        if self.live_transcription_worker:
-            self.live_transcription_worker.stop_transcription()
+        # Live transcription worker is disabled
         if self.llm_worker and self.llm_worker.isRunning():
             self.llm_worker.terminate()
             self.llm_worker.wait()
