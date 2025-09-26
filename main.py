@@ -9,6 +9,7 @@ import sounddevice as sd
 import whisper
 from scipy.io.wavfile import write
 import tempfile
+from collections import deque
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                            QWidget, QPushButton, QTextEdit, QLabel, QProgressBar,
                            QFileDialog, QComboBox, QGroupBox, QFrame)
@@ -109,6 +110,75 @@ class VoiceBall(QWidget):
 class TranscriptionWorker(QThread):
     transcription_ready = pyqtSignal(str)
     progress_update = pyqtSignal(int)
+
+
+class LiveTranscriptionWorker(QThread):
+    live_transcription_ready = pyqtSignal(str)
+    
+    def __init__(self):
+        super().__init__()
+        self.audio_buffer = deque(maxlen=100)  # Keep last 100 chunks (~5-10 seconds)
+        self.model = None
+        self.is_running = False
+        self.sample_rate = 44100
+        self.chunk_duration = 3.0  # Process every 3 seconds
+        self.chunk_samples = int(self.chunk_duration * self.sample_rate)
+        
+    def add_audio_chunk(self, chunk):
+        if self.is_running:
+            self.audio_buffer.append(chunk)
+    
+    def run(self):
+        self.is_running = True
+        try:
+            # Load model once
+            if self.model is None:
+                self.model = whisper.load_model("base")
+                
+            while self.is_running:
+                if len(self.audio_buffer) > 0:
+                    # Get recent audio data (last few seconds)
+                    recent_chunks = list(self.audio_buffer)[-30:]  # Last ~3 seconds
+                    if len(recent_chunks) > 10:  # Only process if we have enough audio
+                        audio_data = np.concatenate(recent_chunks)
+                        
+                        # Convert to format Whisper expects
+                        if audio_data.dtype != np.float32:
+                            if audio_data.dtype == np.int16:
+                                audio_float = audio_data.astype(np.float32) / 32768.0
+                            else:
+                                audio_float = audio_data.astype(np.float32)
+                        else:
+                            audio_float = audio_data
+                        
+                        # Flatten if needed
+                        if len(audio_float.shape) > 1:
+                            audio_float = np.mean(audio_float, axis=1)
+                        
+                        # Resample to 16kHz if needed
+                        if self.sample_rate != 16000:
+                            import scipy.signal
+                            num_samples = int(len(audio_float) * 16000 / self.sample_rate)
+                            audio_float = scipy.signal.resample(audio_float, num_samples)
+                        
+                        # Transcribe
+                        try:
+                            result = self.model.transcribe(audio_float, fp16=False)
+                            text = result["text"].strip()
+                            if text:  # Only emit if there's actual text
+                                self.live_transcription_ready.emit(text)
+                        except Exception as e:
+                            print(f"Live transcription error: {e}")
+                
+                # Wait before next processing
+                self.msleep(1000)  # Process every 1 second
+                
+        except Exception as e:
+            print(f"Live transcription worker error: {e}")
+    
+    def stop_transcription(self):
+        self.is_running = False
+        self.wait()
     
     def __init__(self, audio_data, sample_rate):
         super().__init__()
@@ -120,7 +190,14 @@ class TranscriptionWorker(QThread):
         try:
             self.progress_update.emit(20)
             if self.model is None:
-                self.model = whisper.load_model("base")
+                try:
+                    # Try to load the model with error handling
+                    self.model = whisper.load_model("base")
+                    if self.model is None:
+                        raise Exception("Failed to load Whisper model")
+                except Exception as e:
+                    self.transcription_ready.emit(f"Error loading Whisper model: {str(e)}. Please ensure the model files are included.")
+                    return
             
             self.progress_update.emit(50)
             
@@ -167,6 +244,9 @@ class VoiceTranscriberApp(QMainWindow):
         self.output_directory = os.path.expanduser("~/Documents")
         self.audio_queue = queue.Queue()
         self.transcription_worker = None
+        self.live_transcription_worker = None
+        self.live_transcription_enabled = True
+        self.accumulated_live_text = ""
         
         self.init_ui()
         self.init_audio()
@@ -229,11 +309,38 @@ class VoiceTranscriberApp(QMainWindow):
         self.progress_bar.setFixedHeight(8)
         layout.addWidget(self.progress_bar)
         
-        # Transcription display (selectable text, no visible box)
+        # Live transcription display (real-time)
+        live_label = QLabel("Live Transcription:")
+        live_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        layout.addWidget(live_label)
+        
+        self.live_transcription_text = QTextEdit()
+        self.live_transcription_text.setFont(QFont("Segoe UI", 14, QFont.Weight.Normal))
+        self.live_transcription_text.setMaximumHeight(100)
+        self.live_transcription_text.setPlainText("Live transcription will appear here...")
+        self.live_transcription_text.setReadOnly(True)
+        self.live_transcription_text.setStyleSheet("""
+            QTextEdit {
+                color: #00ff88;
+                background: rgba(0, 255, 136, 0.1);
+                border: 1px solid rgba(0, 255, 136, 0.3);
+                border-radius: 8px;
+                padding: 15px;
+                selection-background-color: rgba(0, 255, 136, 0.3);
+                selection-color: #ffffff;
+            }
+        """)
+        layout.addWidget(self.live_transcription_text)
+        
+        # Final transcription display (after recording stops)
+        final_label = QLabel("Final Transcription:")
+        final_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        layout.addWidget(final_label)
+        
         self.transcription_text = QTextEdit()
         self.transcription_text.setFont(QFont("Segoe UI", 16, QFont.Weight.Normal))
         self.transcription_text.setMinimumHeight(200)
-        self.transcription_text.setPlainText("Your transcription will appear here...")
+        self.transcription_text.setPlainText("Final transcription will appear here...")
         self.transcription_text.setReadOnly(True)
         self.transcription_text.setStyleSheet("""
             QTextEdit {
@@ -344,8 +451,18 @@ class VoiceTranscriberApp(QMainWindow):
             
             self.recording = True
             self.recorded_data = []
+            self.accumulated_live_text = ""
             self.voice_ball.set_recording(True)
             self.status_label.setText("Recording... Speak now!")
+            
+            # Clear live transcription display
+            self.live_transcription_text.setPlainText("Listening...")
+            
+            # Start live transcription worker
+            if self.live_transcription_enabled:
+                self.live_transcription_worker = LiveTranscriptionWorker()
+                self.live_transcription_worker.live_transcription_ready.connect(self.on_live_transcription)
+                self.live_transcription_worker.start()
             
             # Start recording stream
             self.stream = sd.InputStream(
@@ -370,6 +487,10 @@ class VoiceTranscriberApp(QMainWindow):
         # Store audio data
         self.recorded_data.append(indata.copy())
         
+        # Send to live transcription worker
+        if self.live_transcription_worker and self.live_transcription_enabled:
+            self.live_transcription_worker.add_audio_chunk(indata.copy())
+        
         # Update voice ball
         volume_norm = np.linalg.norm(indata) * 10
         self.audio_queue.put(volume_norm)
@@ -392,17 +513,20 @@ class VoiceTranscriberApp(QMainWindow):
             self.stream.stop()
             self.stream.close()
             
+            # Stop live transcription worker
+            if self.live_transcription_worker:
+                self.live_transcription_worker.stop_transcription()
+                self.live_transcription_worker = None
+            
             self.voice_ball.set_recording(False)
-            self.status_label.setText("Processing audio...")
+            self.status_label.setText("Processing final transcription...")
             
             # Save audio file
             if self.recorded_data:
                 audio_data = np.concatenate(self.recorded_data, axis=0)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 
-                # Only process audio for transcription - don't save audio files
-                
-                # Start transcription using audio data directly (no file needed)
+                # Start final transcription using audio data directly
                 self.progress_bar.setVisible(True)
                 self.progress_bar.setValue(0)
                 
@@ -415,6 +539,10 @@ class VoiceTranscriberApp(QMainWindow):
                 
         except Exception as e:
             self.status_label.setText(f"Error stopping recording: {e}")
+    
+    def on_live_transcription(self, text):
+        # Update live transcription display with most recent text
+        self.live_transcription_text.setPlainText(text)
     
     def on_transcription_ready(self, text):
         self.progress_bar.setVisible(False)
@@ -435,6 +563,8 @@ class VoiceTranscriberApp(QMainWindow):
     def closeEvent(self, event):
         if self.recording:
             self.stop_recording()
+        if self.live_transcription_worker:
+            self.live_transcription_worker.stop_transcription()
         event.accept()
 
 
