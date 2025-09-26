@@ -177,8 +177,20 @@ class TranscriptionWorker(QThread):
             
             self.progress_update.emit(80)
             
-            # Transcribe directly from numpy array with word-level timestamps
-            result = self.model.transcribe(audio_float, word_timestamps=True)
+            # Transcribe directly from numpy array 
+            # Use simpler settings for loaded files to prevent crashes
+            if len(audio_float) > 16000 * 60:  # More than 1 minute
+                # Safer settings for long audio
+                result = self.model.transcribe(
+                    audio_float, 
+                    word_timestamps=False,  # Disable word timestamps for stability
+                    fp16=False,  # Use FP32 for stability
+                    temperature=0.0,  # More deterministic
+                    no_speech_threshold=0.3
+                )
+            else:
+                # Standard settings for short audio
+                result = self.model.transcribe(audio_float, word_timestamps=True)
             
             self.progress_update.emit(100)
             
@@ -198,6 +210,104 @@ class TranscriptionWorker(QThread):
             self.segments_ready.emit(segments)
         except Exception as e:
             self.transcription_ready.emit(f"Error during transcription: {str(e)}")
+
+
+class ChunkedTranscriptionWorker(QThread):
+    transcription_ready = pyqtSignal(str)
+    segments_ready = pyqtSignal(list)  
+    progress_update = pyqtSignal(int)
+    
+    def __init__(self, audio_data, sample_rate, chunk_duration=300):
+        super().__init__()
+        self.audio_data = audio_data
+        self.sample_rate = sample_rate
+        self.chunk_duration = chunk_duration
+        self.model = None
+        
+    def run(self):
+        try:
+            self.progress_update.emit(5)
+            
+            # Load Whisper model
+            if self.model is None:
+                try:
+                    self.model = whisper.load_model("base")
+                    if self.model is None:
+                        raise Exception("Failed to load Whisper model")
+                except Exception as e:
+                    self.transcription_ready.emit(f"Error loading Whisper model: {str(e)}")
+                    return
+            
+            self.progress_update.emit(10)
+            
+            # Calculate chunks
+            chunk_samples = int(self.chunk_duration * self.sample_rate)
+            total_samples = len(self.audio_data)
+            num_chunks = (total_samples + chunk_samples - 1) // chunk_samples
+            
+            print(f"Processing {num_chunks} chunks of {self.chunk_duration/60:.1f} minutes each...")
+            
+            # Process each chunk
+            all_text = []
+            all_segments = []
+            
+            for i in range(num_chunks):
+                start_sample = i * chunk_samples
+                end_sample = min((i + 1) * chunk_samples, total_samples)
+                chunk_audio = self.audio_data[start_sample:end_sample]
+                
+                # Calculate time offset for this chunk
+                time_offset = i * self.chunk_duration
+                
+                print(f"Processing chunk {i+1}/{num_chunks} ({time_offset/60:.1f}-{(time_offset + len(chunk_audio)/self.sample_rate)/60:.1f}min)...")
+                
+                # Resample chunk to 16kHz if needed
+                if self.sample_rate != 16000:
+                    import scipy.signal
+                    num_samples = int(len(chunk_audio) * 16000 / self.sample_rate)
+                    chunk_audio = scipy.signal.resample(chunk_audio, num_samples)
+                
+                # Transcribe chunk with safe settings
+                result = self.model.transcribe(
+                    chunk_audio, 
+                    word_timestamps=False,  # Disable for stability
+                    fp16=False,
+                    temperature=0.0,
+                    no_speech_threshold=0.6
+                )
+                
+                chunk_text = result["text"].strip()
+                if chunk_text:
+                    all_text.append(chunk_text)
+                
+                # Process segments with time offset
+                if "segments" in result:
+                    for segment in result["segments"]:
+                        adjusted_segment = {
+                            'start': segment.get('start', 0) + time_offset,
+                            'end': segment.get('end', 0) + time_offset,
+                            'text': segment.get('text', '')
+                        }
+                        all_segments.append(adjusted_segment)
+                
+                # Update progress
+                chunk_progress = 10 + (i + 1) * 85 // num_chunks
+                self.progress_update.emit(chunk_progress)
+            
+            # Stitch all transcriptions together
+            full_text = ' '.join(all_text)
+            
+            self.progress_update.emit(100)
+            
+            # Emit results
+            self.transcription_ready.emit(full_text)
+            self.segments_ready.emit(all_segments)
+            
+            print(f"Chunked transcription complete: {len(full_text)} characters, {len(all_segments)} segments")
+            
+        except Exception as e:
+            print(f"Chunked transcription error: {str(e)}")
+            self.transcription_ready.emit(f"Error during chunked transcription: {str(e)}")
 
 
 class LLMAnalysisWorker(QThread):
@@ -1563,7 +1673,7 @@ class VoiceTranscriberApp(QMainWindow):
                 self.analysis_status.setText(f"Error loading file: {str(e)}")
     
     def load_audio_file(self):
-        """Load an audio file and transcribe it"""
+        """Load an audio file and transcribe it with chunking for stability"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Load Audio File",
@@ -1573,6 +1683,21 @@ class VoiceTranscriberApp(QMainWindow):
         
         if file_path:
             try:
+                # Check file size first (limit to ~100MB to prevent crashes)
+                file_size = os.path.getsize(file_path)
+                max_size = 100 * 1024 * 1024  # 100MB limit
+                
+                if file_size > max_size:
+                    reply = QMessageBox.question(
+                        self,
+                        'Large Audio File',
+                        f'Audio file is {file_size / (1024*1024):.1f}MB. Large files may cause crashes.\n\nContinue anyway?',
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No
+                    )
+                    if reply != QMessageBox.StandardButton.Yes:
+                        return
+                
                 self.analysis_status.setText("Loading audio file...")
                 
                 # Import librosa for loading different audio formats
@@ -1583,16 +1708,51 @@ class VoiceTranscriberApp(QMainWindow):
                 except ImportError:
                     LIBROSA_AVAILABLE = False
                 
-                # Load audio file
+                # Load audio file with chunked processing for long files
+                chunk_duration = 300  # 5 minutes per chunk for processing
+                
                 if LIBROSA_AVAILABLE:
-                    # Use librosa for better format support
-                    audio_data, sample_rate = librosa.load(file_path, sr=None, mono=True)
+                    # Get full duration first
+                    duration = librosa.get_duration(path=file_path)
+                    
+                    if duration > chunk_duration:
+                        # Inform user about chunked processing
+                        QMessageBox.information(
+                            self,
+                            'Long Audio File',
+                            f'Audio is {duration/60:.1f} minutes long. It will be processed in {chunk_duration//60}-minute chunks and stitched together.\n\nThis may take a while but will transcribe the full audio.',
+                            QMessageBox.StandardButton.Ok
+                        )
+                        
+                        # Load full file for chunked processing
+                        audio_data, sample_rate = librosa.load(file_path, sr=None, mono=True)
+                        self.process_chunked_audio = True
+                        self.chunk_duration = chunk_duration
+                    else:
+                        # Load full file normally
+                        audio_data, sample_rate = librosa.load(file_path, sr=None, mono=True)
+                        self.process_chunked_audio = False
+                    
                     # Convert to the format expected by our transcription worker
                     audio_data = audio_data.astype(np.float32)
                 else:
                     # Fallback: try to load with scipy for WAV files
                     from scipy.io import wavfile
                     sample_rate, audio_data = wavfile.read(file_path)
+                    
+                    # Check duration for chunked processing
+                    duration = len(audio_data) / sample_rate
+                    if duration > chunk_duration:
+                        QMessageBox.information(
+                            self,
+                            'Long Audio File',
+                            f'Audio is {duration/60:.1f} minutes long. It will be processed in {chunk_duration//60}-minute chunks and stitched together.\n\nThis may take a while but will transcribe the full audio.',
+                            QMessageBox.StandardButton.Ok
+                        )
+                        self.process_chunked_audio = True
+                        self.chunk_duration = chunk_duration
+                    else:
+                        self.process_chunked_audio = False
                     
                     # Convert to float32 and normalize
                     if audio_data.dtype == np.int16:
@@ -1606,12 +1766,16 @@ class VoiceTranscriberApp(QMainWindow):
                     if len(audio_data.shape) > 1:
                         audio_data = np.mean(audio_data, axis=1)
                 
+                # Calculate final duration for display
+                duration = len(audio_data) / sample_rate
+                
                 # Store the audio file path for diarization
                 self.last_audio_file = file_path
                 
                 # Set up UI for transcription
                 filename = os.path.basename(file_path)
-                self.analysis_status.setText(f"Loaded: {filename} - Starting transcription...")
+                duration_min = len(audio_data) / sample_rate / 60
+                self.analysis_status.setText(f"Loaded: {filename} ({duration_min:.1f}min) - Starting transcription...")
                 self.transcription_text.setPlainText("Transcribing audio file...")
                 
                 # Start transcription process
@@ -1621,8 +1785,20 @@ class VoiceTranscriberApp(QMainWindow):
                 self.progress_bar.setVisible(True)
                 self.progress_bar.setValue(0)
                 
-                # Create and start transcription worker
-                self.transcription_worker = TranscriptionWorker(audio_data, sample_rate)
+                # Create and start appropriate transcription worker
+                if hasattr(self, 'process_chunked_audio') and self.process_chunked_audio:
+                    # Use chunked processing for long audio
+                    self.transcription_worker = ChunkedTranscriptionWorker(
+                        audio_data, 
+                        sample_rate, 
+                        self.chunk_duration
+                    )
+                    print(f"Using chunked transcription for {duration/60:.1f}min audio file")
+                else:
+                    # Use regular processing for short audio
+                    self.transcription_worker = TranscriptionWorker(audio_data, sample_rate)
+                    print(f"Using regular transcription for {duration/60:.1f}min audio file")
+                
                 self.transcription_worker.transcription_ready.connect(self.on_transcription_ready)
                 self.transcription_worker.segments_ready.connect(self.on_segments_ready)
                 self.transcription_worker.progress_update.connect(self.progress_bar.setValue)
