@@ -17,13 +17,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout
                            QTabWidget, QScrollArea, QDialog, QDialogButtonBox, 
                            QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox,
                            QSplitter)
-try:
-    from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
-    import torch
-    LLM_AVAILABLE = True
-except ImportError:
-    LLM_AVAILABLE = False
-    print("LLM dependencies not available. Install transformers and torch for analysis features.")
+# Ollama is now used for LLM functionality - no transformers needed
 
 try:
     from pyannote.audio import Pipeline
@@ -594,20 +588,14 @@ class LLMAnalysisWorker(QThread):
     analysis_ready = pyqtSignal(str, str)  # analysis_type, result
     analysis_error = pyqtSignal(str)
     
-    def __init__(self, text, model_name="TinyLlama/TinyLlama-1.1B-Chat-v1.0"):
+    def __init__(self, text, model_name="gemma2:2b"):
         super().__init__()
         self.text = text
         self.model_name = model_name
-        self.tokenizer = None
-        self.model = None
         
     def run(self):
-        if not LLM_AVAILABLE:
-            self.analysis_error.emit("LLM dependencies not available")
-            return
-            
         try:
-            self.analysis_ready.emit("status", f"Loading {self.model_name}...")
+            self.analysis_ready.emit("status", f"Using Ollama model: {self.model_name}")
             
             # Check if using keyword-only analysis
             if self.model_name == "keyword-only":
@@ -615,51 +603,18 @@ class LLMAnalysisWorker(QThread):
                 self._fallback_analysis()
                 return
             
-            # Load the selected model
-            from transformers import AutoTokenizer, AutoModelForCausalLM
-            import torch
-            
-            # Determine optimal device for Apple Silicon
-            device = self._get_optimal_device()
-            self.analysis_ready.emit("status", f"Using device: {device}")
-            
-            # Load tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            
-            # Handle different tokenizer configurations
-            if self.tokenizer.pad_token is None:
-                if self.tokenizer.eos_token:
-                    self.tokenizer.pad_token = self.tokenizer.eos_token
-                elif self.tokenizer.unk_token:
-                    self.tokenizer.pad_token = self.tokenizer.unk_token
-                else:
-                    # Add a new pad token
-                    self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-            
-            print(f"Tokenizer loaded: pad_token={self.tokenizer.pad_token}, eos_token={self.tokenizer.eos_token}")
-            
-            # Load model with optimal settings for M1
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                torch_dtype=self._get_optimal_dtype(device),
-                low_cpu_mem_usage=True,
-                device_map="auto" if device == "cuda" else None
-            )
-            
-            # Resize model embeddings if we added new tokens
-            if len(self.tokenizer) > self.model.config.vocab_size:
-                self.model.resize_token_embeddings(len(self.tokenizer))
-            
-            # Move model to optimal device
-            if device != "cuda":  # cuda uses device_map="auto"
-                self.model = self.model.to(device)
-            
-            self.analysis_ready.emit("status", f"Model loaded on {device}")
-            
-            self.analysis_ready.emit("status", "Generating summary...")
+            # Check if Ollama is available
+            import subprocess
+            try:
+                subprocess.run(["ollama", "list"], capture_output=True, check=True)
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                self.analysis_error.emit("Ollama is not available. Please install Ollama or use keyword-only analysis.")
+                return
             
             # Truncate text if too long to avoid context overflow
-            text_for_analysis = self.text[:2000] + "..." if len(self.text) > 2000 else self.text
+            text_for_analysis = self.text[:4000] + "..." if len(self.text) > 4000 else self.text
+            
+            self.analysis_ready.emit("status", "Generating summary...")
             
             # Generate summary
             summary_prompt = f"""Summarize the following transcript in 2-3 clear sentences. Focus on the main topics discussed.
@@ -669,10 +624,10 @@ Transcript: {text_for_analysis}
 Summary:"""
             
             print(f"Generating summary with {self.model_name}...")
-            summary = self._generate_response(summary_prompt, max_length=150)
+            summary = self._generate_response(summary_prompt)
             print(f"Summary result: '{summary[:100]}...'")
             
-            if not summary or "Generation failed" in summary:
+            if not summary or "error" in summary.lower():
                 self.analysis_error.emit(f"Summary generation failed with {self.model_name}")
                 return
                 
@@ -681,18 +636,21 @@ Summary:"""
             self.analysis_ready.emit("status", "Extracting key points...")
             
             # Generate key points
-            key_points_prompt = f"""Extract the main key points from this transcript as a bullet list. Include only the most important ideas.
+            key_points_prompt = f"""Extract the main key points from this transcript as a bullet list. Include only the most important ideas. Format as bullet points with • symbols.
 
 Transcript: {text_for_analysis}
 
-Key Points:
-•"""
+Key Points:"""
             
             print(f"Generating key points with {self.model_name}...")
-            key_points_response = self._generate_response(key_points_prompt, max_length=200)
+            key_points_response = self._generate_response(key_points_prompt)
             
-            if key_points_response and "Generation failed" not in key_points_response:
-                key_points = "• " + key_points_response
+            if key_points_response and "error" not in key_points_response.lower():
+                # Ensure proper bullet formatting
+                if not key_points_response.strip().startswith("•"):
+                    key_points = "• " + key_points_response.replace("\n", "\n• ")
+                else:
+                    key_points = key_points_response
             else:
                 key_points = "• Could not extract key points"
                 
@@ -701,18 +659,21 @@ Key Points:
             self.analysis_ready.emit("status", "Identifying action items...")
             
             # Generate action items
-            action_prompt = f"""Identify any action items, tasks, or follow-up items mentioned in this transcript. List them clearly.
+            action_prompt = f"""Identify any action items, tasks, or follow-up items mentioned in this transcript. List them clearly with • bullet points.
 
 Transcript: {text_for_analysis}
 
-Action Items:
-•"""
+Action Items:"""
             
             print(f"Generating actions with {self.model_name}...")
-            actions_response = self._generate_response(action_prompt, max_length=200)
+            actions_response = self._generate_response(action_prompt)
             
-            if actions_response and "Generation failed" not in actions_response:
-                actions = "• " + actions_response
+            if actions_response and "error" not in actions_response.lower():
+                # Ensure proper bullet formatting
+                if not actions_response.strip().startswith("•"):
+                    actions = "• " + actions_response.replace("\n", "\n• ")
+                else:
+                    actions = actions_response
             else:
                 actions = "• No specific action items identified"
                 
@@ -721,160 +682,75 @@ Action Items:
             self.analysis_ready.emit("status", "Analysis complete")
             
         except Exception as e:
-            # Fallback to keyword-based analysis if LLM fails
-            self.analysis_ready.emit("status", f"LLM failed, using fallback analysis: {str(e)}")
+            # Fallback to keyword-based analysis if Ollama fails
+            self.analysis_ready.emit("status", f"Ollama failed, using fallback analysis: {str(e)}")
             self._fallback_analysis()
     
-    def _get_optimal_device(self):
-        """Determine the best device for inference on this system"""
-        import torch
-        
-        # Check for Apple Silicon MPS (Metal Performance Shaders)
-        if torch.backends.mps.is_available() and torch.backends.mps.is_built():
-            return "mps"
-        # Check for NVIDIA CUDA
-        elif torch.cuda.is_available():
-            return "cuda"
-        # Fallback to CPU
-        else:
-            return "cpu"
-    
-    def _get_optimal_dtype(self, device):
-        """Get optimal data type for the given device"""
-        import torch
-        
-        if device == "mps":
-            # MPS works best with float32 for stability
-            return torch.float32
-        elif device == "cuda":
-            # CUDA can use float16 for faster inference
-            return torch.float16
-        else:
-            # CPU uses float32
-            return torch.float32
-    
-    def _generate_response(self, prompt, max_length=150):
+    def _generate_response(self, prompt):
         try:
-            import torch
+            import subprocess
+            import json
             
-            # Model-specific prompt formatting
-            formatted_prompt = self._format_prompt_for_model(prompt)
+            # Use Ollama API to generate response
+            cmd = [
+                "ollama", "run", self.model_name,
+                prompt
+            ]
             
-            # Tokenize input with attention mask
-            inputs = self.tokenizer(
-                formatted_prompt, 
-                return_tensors="pt", 
-                padding=True, 
-                truncation=True,
-                max_length=1024  # Increased for better context
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60  # 60 second timeout
             )
             
-            # Move inputs to same device as model
-            device = next(self.model.parameters()).device
-            inputs = {key: value.to(device) for key, value in inputs.items()}
+            if result.returncode != 0:
+                print(f"Ollama error: {result.stderr}")
+                return f"Generation failed: {result.stderr}"
             
-            # Model-specific generation parameters
-            generation_params = self._get_generation_params(max_length)
-            
-            # Generate response with optimal settings
-            with torch.no_grad():
-                with torch.inference_mode():
-                    outputs = self.model.generate(
-                        **inputs,
-                        **generation_params
-                    )
-            
-            # Decode only the new tokens (skip input)
-            input_length = inputs['input_ids'].shape[1]
-            new_tokens = outputs[0][input_length:]
-            response = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+            response = result.stdout.strip()
             
             # Post-process response
             response = self._post_process_response(response)
             
-            return response[:500]  # Limit response length
+            return response[:800]  # Limit response length
             
+        except subprocess.TimeoutExpired:
+            return "Generation failed: Timeout"
         except Exception as e:
             print(f"Generation error with {self.model_name}: {str(e)}")
             return f"Generation failed: {str(e)}"
-    
-    def _format_prompt_for_model(self, prompt):
-        """Format prompt according to model requirements"""
-        if "phi-2" in self.model_name.lower():
-            # Phi-2 works better with instruction format
-            return f"Instruction: {prompt}\nResponse:"
-        elif "tinyllama" in self.model_name.lower():
-            # TinyLlama works well with chat format
-            return f"<|system|>\nYou are a helpful assistant.</s>\n<|user|>\n{prompt}</s>\n<|assistant|>\n"
-        elif "qwen" in self.model_name.lower():
-            # Qwen2 works with simple instruction format
-            return f"Human: {prompt}\nAssistant:"
-        else:
-            # Default format
-            return prompt
-    
-    def _get_generation_params(self, max_length):
-        """Get model-specific generation parameters"""
-        base_params = {
-            "max_new_tokens": max_length,
-            "pad_token_id": self.tokenizer.eos_token_id,
-            "eos_token_id": self.tokenizer.eos_token_id,
-            "use_cache": True
-        }
-        
-        if "phi-2" in self.model_name.lower():
-            # Phi-2 specific parameters
-            base_params.update({
-                "temperature": 0.8,
-                "do_sample": True,
-                "top_p": 0.9,
-                "repetition_penalty": 1.2
-            })
-        elif "tinyllama" in self.model_name.lower():
-            # TinyLlama specific parameters
-            base_params.update({
-                "temperature": 0.7,
-                "do_sample": True,
-                "top_p": 0.95,
-                "repetition_penalty": 1.1
-            })
-        elif "qwen" in self.model_name.lower():
-            # Qwen2 specific parameters
-            base_params.update({
-                "temperature": 0.7,
-                "do_sample": True,
-                "top_p": 0.8,
-                "repetition_penalty": 1.1
-            })
-        else:
-            # Default parameters
-            base_params.update({
-                "temperature": 0.7,
-                "do_sample": True,
-                "repetition_penalty": 1.1
-            })
-        
-        return base_params
     
     def _post_process_response(self, response):
         """Clean up model response"""
         response = response.strip()
         
-        # Remove common artifacts
-        if response.startswith("Response:"):
-            response = response[9:].strip()
-        if response.startswith("Assistant:"):
-            response = response[10:].strip()
+        # Remove common artifacts and prompts echoed back
+        lines = response.split('\n')
+        cleaned_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            # Skip empty lines and prompt repetitions
+            if (line and 
+                not line.startswith("Transcript:") and 
+                not line.startswith("Summary:") and
+                not line.startswith("Key Points:") and
+                not line.startswith("Action Items:")):
+                cleaned_lines.append(line)
+        
+        response = '\n'.join(cleaned_lines)
         
         # Remove incomplete sentences at the end
-        sentences = response.split('.')
-        if len(sentences) > 1 and len(sentences[-1].strip()) < 10:
-            response = '.'.join(sentences[:-1]) + '.'
+        if '.' in response:
+            sentences = response.split('.')
+            if len(sentences) > 1 and len(sentences[-1].strip()) < 10:
+                response = '.'.join(sentences[:-1]) + '.'
         
         return response
     
     def _fallback_analysis(self):
-        """Fallback keyword-based analysis if LLM fails"""
+        """Fallback keyword-based analysis if Ollama fails"""
         try:
             sentences = self.text.split('.')
             
@@ -1348,7 +1224,7 @@ class VoiceTranscriberApp(QMainWindow):
         self.last_recorded_audio = None  # Backup of last recording
         self.llm_worker = None
         self.current_transcription_text = ""
-        self.selected_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"  # Default model
+        self.selected_model = "qwen2.5:1.5b"  # Default model
         self.live_text_sentences = []  # Store live transcription sentences
         self.diarization_worker = None
         self.speaker_segments = []  # Store speaker diarization results
@@ -1528,9 +1404,8 @@ class VoiceTranscriberApp(QMainWindow):
         model_label.setFont(QFont("Segoe UI", 10))
         
         self.model_combo = QComboBox()
-        self.model_combo.addItem("TinyLlama 1.1B (Fastest)", "TinyLlama/TinyLlama-1.1B-Chat-v1.0")
-        self.model_combo.addItem("Phi-2 2.7B (Fast)", "microsoft/phi-2")
-        self.model_combo.addItem("Qwen2 0.5B (Ultra-Fast)", "Qwen/Qwen2-0.5B-Instruct")
+        self.model_combo.addItem("Qwen2.5 1.5B (Fast)", "qwen2.5:1.5b")
+        self.model_combo.addItem("Gemma2 2B (Fastest)", "gemma2:2b")
         self.model_combo.addItem("Keyword Analysis (No Download)", "keyword-only")
         self.model_combo.currentIndexChanged.connect(self.on_model_changed)
         self.model_combo.setStyleSheet("""
@@ -1618,6 +1493,28 @@ class VoiceTranscriberApp(QMainWindow):
             }
         """)
         analysis_controls.addWidget(self.load_audio_button)
+        
+        # Clean backup files button
+        self.clean_backup_button = QPushButton("🗑️ Clean Backup Audio")
+        self.clean_backup_button.clicked.connect(self.clean_backup_audio)
+        self.clean_backup_button.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #FF5722, stop:1 #D84315);
+                color: white;
+                border: none;
+                padding: 8px 15px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 10pt;
+                margin: 2px 0px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #FF6B35, stop:1 #E55A2B);
+            }
+        """)
+        analysis_controls.addWidget(self.clean_backup_button)
         
         # Diarization controls
         diarization_layout = QHBoxLayout()
@@ -2014,12 +1911,10 @@ class VoiceTranscriberApp(QMainWindow):
             self.analysis_status.setText("No transcription to analyze")
             return
         
-        if not LLM_AVAILABLE:
-            self.analysis_status.setText("Run ./install_llm.sh to install LLM dependencies")
-            return
+        # LLM functionality is now provided by Ollama
             
         self.analyze_button.setEnabled(False)
-        self.analysis_status.setText(f"🔄 Loading {self.selected_model.split('/')[-1]}...")
+        self.analysis_status.setText(f"🔄 Using Ollama model {self.selected_model}...")
         
         # Clear previous results
         self.summary_text.setPlainText("Loading model and analyzing...")
@@ -2368,6 +2263,72 @@ class VoiceTranscriberApp(QMainWindow):
         
         # Clear the backup audio data after successful transcription
         self.last_recorded_audio = None
+    
+    def clean_backup_audio(self):
+        """Clean up backup audio files to free disk space"""
+        try:
+            # Find backup audio files
+            backup_files = []
+            for file in os.listdir(self.output_directory):
+                if file.startswith("backup_audio_") and file.endswith(".wav"):
+                    backup_files.append(os.path.join(self.output_directory, file))
+            
+            if not backup_files:
+                QMessageBox.information(
+                    self,
+                    "No Backup Files",
+                    "No backup audio files found to delete."
+                )
+                return
+            
+            # Calculate total size
+            total_size = sum(os.path.getsize(f) for f in backup_files if os.path.exists(f))
+            size_mb = total_size / (1024 * 1024)
+            
+            # Confirm deletion
+            reply = QMessageBox.question(
+                self,
+                "Delete Backup Audio Files",
+                f"Found {len(backup_files)} backup audio files ({size_mb:.1f} MB).\n\n"
+                f"These are automatically created copies of your recordings.\n"
+                f"Deleting them will free up disk space but you'll lose the audio backups.\n\n"
+                f"Do you want to delete all backup audio files?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                deleted_count = 0
+                deleted_size = 0
+                
+                for file_path in backup_files:
+                    try:
+                        if os.path.exists(file_path):
+                            file_size = os.path.getsize(file_path)
+                            os.remove(file_path)
+                            deleted_count += 1
+                            deleted_size += file_size
+                            print(f"Deleted: {os.path.basename(file_path)}")
+                    except Exception as e:
+                        print(f"Failed to delete {file_path}: {e}")
+                
+                deleted_mb = deleted_size / (1024 * 1024)
+                QMessageBox.information(
+                    self,
+                    "Cleanup Complete",
+                    f"Successfully deleted {deleted_count} backup audio files.\n"
+                    f"Freed {deleted_mb:.1f} MB of disk space."
+                )
+                
+                self.analysis_status.setText(f"Deleted {deleted_count} backup files ({deleted_mb:.1f} MB freed)")
+                
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Cleanup Error",
+                f"Error during backup cleanup: {str(e)}"
+            )
+            self.analysis_status.setText(f"Cleanup error: {str(e)}")
     
     def closeEvent(self, event):
         if self.recording:

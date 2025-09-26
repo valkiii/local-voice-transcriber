@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script to verify that all LLM models can generate output properly.
+Test script to verify that all LLM models can generate output properly using Ollama.
 This helps debug model-specific issues.
 """
 
@@ -10,85 +10,52 @@ import os
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-try:
-    from transformers import AutoTokenizer, AutoModelForCausalLM
-    import torch
-    LLM_AVAILABLE = True
-except ImportError:
-    print("❌ LLM dependencies not available. Install transformers and torch.")
-    sys.exit(1)
+print("✅ Testing Ollama-based LLM models")
 
 def test_model_generation(model_name, test_prompt="Hello, how are you?"):
-    """Test if a model can generate text properly"""
+    """Test if a model can generate text properly using Ollama"""
     print(f"\n🧪 Testing model: {model_name}")
     print(f"📝 Test prompt: {test_prompt}")
     
     try:
-        # Load tokenizer
-        print("Loading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        import subprocess
         
-        # Handle tokenizer configuration
-        if tokenizer.pad_token is None:
-            if tokenizer.eos_token:
-                tokenizer.pad_token = tokenizer.eos_token
-            elif tokenizer.unk_token:
-                tokenizer.pad_token = tokenizer.unk_token
-            else:
-                tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        # Check if Ollama is available
+        print("Checking Ollama availability...")
+        try:
+            subprocess.run(["ollama", "list"], capture_output=True, check=True)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            print("❌ Ollama is not available")
+            return False
         
-        # Load model
-        print("Loading model...")
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.float32,  # Use float32 for compatibility
-            low_cpu_mem_usage=True
+        print("Using Ollama to generate response...")
+        
+        # Use Ollama to generate response
+        cmd = ["ollama", "run", model_name, test_prompt]
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30  # 30 second timeout for testing
         )
         
-        # Resize embeddings if needed
-        if len(tokenizer) > model.config.vocab_size:
-            model.resize_token_embeddings(len(tokenizer))
+        if result.returncode != 0:
+            print(f"❌ Ollama error: {result.stderr}")
+            return False
         
-        # Format prompt based on model
-        if "phi-2" in model_name.lower():
-            formatted_prompt = f"Instruction: {test_prompt}\nResponse:"
-        elif "tinyllama" in model_name.lower():
-            formatted_prompt = f"<|system|>\nYou are a helpful assistant.</s>\n<|user|>\n{test_prompt}</s>\n<|assistant|>\n"
-        elif "qwen" in model_name.lower():
-            formatted_prompt = f"Human: {test_prompt}\nAssistant:"
-        else:
-            formatted_prompt = test_prompt
+        response = result.stdout.strip()
         
-        # Tokenize
-        inputs = tokenizer(
-            formatted_prompt,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=512
-        )
+        if not response:
+            print("❌ Empty response from model")
+            return False
         
-        # Generate
-        print("Generating response...")
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=50,
-                temperature=0.7,
-                do_sample=True,
-                pad_token_id=tokenizer.eos_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-                repetition_penalty=1.1
-            )
-        
-        # Decode response
-        input_length = inputs['input_ids'].shape[1]
-        new_tokens = outputs[0][input_length:]
-        response = tokenizer.decode(new_tokens, skip_special_tokens=True)
-        
-        print(f"✅ Response: {response.strip()[:200]}...")
+        print(f"✅ Response: {response[:200]}...")
         return True
         
+    except subprocess.TimeoutExpired:
+        print("❌ Timeout waiting for model response")
+        return False
     except Exception as e:
         print(f"❌ Error with {model_name}: {str(e)}")
         return False
@@ -99,9 +66,8 @@ def main():
     print("=" * 50)
     
     models_to_test = [
-        "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-        "microsoft/phi-2",
-        "Qwen/Qwen2-0.5B-Instruct"
+        "qwen2.5:1.5b",
+        "gemma2:2b"
     ]
     
     test_prompt = "Summarize the following text: The meeting discussed quarterly results and future plans."
