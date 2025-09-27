@@ -1477,7 +1477,7 @@ class VoiceTranscriberApp(QMainWindow):
         
         model_label = QLabel("Model:")
         model_label.setFont(QFont("Circular", 9))
-        model_label.setStyleSheet("color: #ff00ff; font-family: 'Circular', 'SF Pro Display', 'Segoe UI', sans-serif;")
+        model_label.setStyleSheet("color: #ff00ff; font-family: 'Circular', 'SF Pro Display', 'Segoe UI', sans-serif; background: transparent; border: none;")
         model_layout.addWidget(model_label)
         
         self.model_combo = QComboBox()
@@ -1485,6 +1485,10 @@ class VoiceTranscriberApp(QMainWindow):
         self.model_combo.addItem("Gemma2 2B (Fastest)", "gemma2:2b")
         self.model_combo.addItem("Keyword Analysis (No Download)", "keyword-only")
         self.model_combo.currentIndexChanged.connect(self.on_model_changed)
+        
+        # Make dropdown appear directly below the combo box
+        self.model_combo.view().setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.model_combo.setMaxVisibleItems(3)
         self.model_combo.setStyleSheet("""
             QComboBox {
                 background: #2a2a2a;
@@ -1510,12 +1514,14 @@ class VoiceTranscriberApp(QMainWindow):
             QComboBox QAbstractItemView {
                 background: #2a2a2a;
                 border: 1px solid #555;
-                border-radius: 6px;
+                border-radius: 0px;
+                border-top: none;
                 color: #ffffff;
                 selection-background-color: #4a4a4a;
                 selection-color: #ffffff;
                 font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
                 outline: none;
+                show-decoration-selected: 1;
             }
             QComboBox QAbstractItemView::item {
                 padding: 8px;
