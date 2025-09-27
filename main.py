@@ -1374,6 +1374,29 @@ class VoiceTranscriberApp(QMainWindow):
         """Handle model change for custom dropdown"""
         self.selected_model = model_value
         self.analysis_status.setText(f"Ready for analysis with {model_value.split('/')[-1]}")
+    
+    def show_analysis_content(self, content_type):
+        """Show the selected analysis content and update button states"""
+        # Uncheck all buttons first
+        self.summary_button.setChecked(False)
+        self.key_points_button.setChecked(False)
+        self.actions_button.setChecked(False)
+        
+        # Hide all content areas
+        self.summary_text.setVisible(False)
+        self.key_points_text.setVisible(False)
+        self.action_items_text.setVisible(False)
+        
+        # Show selected content and check corresponding button
+        if content_type == 'summary':
+            self.summary_button.setChecked(True)
+            self.summary_text.setVisible(True)
+        elif content_type == 'key_points':
+            self.key_points_button.setChecked(True)
+            self.key_points_text.setVisible(True)
+        elif content_type == 'actions':
+            self.actions_button.setChecked(True)
+            self.action_items_text.setVisible(True)
         
     def init_ui(self):
         self.setWindowTitle("Voice Transcriber with AI Analysis")
@@ -1756,30 +1779,76 @@ class VoiceTranscriberApp(QMainWindow):
         
         right_layout.addWidget(settings_card)
         
-        # Analysis results tabs
-        self.analysis_tabs = QTabWidget()
-        self.analysis_tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #555;
-                background: rgba(255, 255, 255, 0.05);
-                border-radius: 8px;
-            }
-            QTabBar::tab {
-                background: #2a2a2a;
-                color: #fff;
-                padding: 6px 12px;
-                margin-right: 1px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                font-size: 9pt;
-            }
-            QTabBar::tab:selected {
-                background: #3a3a3a;
-                color: #ff00ff;
-            }
-        """)
+        # Analysis results with oval buttons
+        analysis_container = QWidget()
+        analysis_layout = QVBoxLayout(analysis_container)
+        analysis_layout.setContentsMargins(0, 0, 0, 0)
+        analysis_layout.setSpacing(12)
         
-        # Summary tab
+        # Oval button controls
+        button_container = QWidget()
+        button_layout = QHBoxLayout(button_container)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(8)
+        
+        # Create oval buttons
+        self.summary_button = QPushButton("📊 Summary")
+        self.key_points_button = QPushButton("🔑 Key Points")
+        self.actions_button = QPushButton("✅ Actions")
+        
+        # Style oval buttons
+        oval_button_style = """
+            QPushButton {
+                background: #3a3a3a;
+                border: 1px solid #555;
+                border-radius: 20px;
+                padding: 8px 16px;
+                color: #ffffff;
+                font-size: 9pt;
+                font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
+                font-weight: bold;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background: #4a4a4a;
+                border: 1px solid #777;
+            }
+            QPushButton:checked {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(255, 105, 180, 0.8), stop:1 rgba(255, 69, 180, 0.9));
+                border: 1px solid rgba(255, 105, 180, 0.6);
+                color: #ffffff;
+            }
+        """
+        
+        # Make buttons checkable and connect handlers
+        self.summary_button.setCheckable(True)
+        self.summary_button.setChecked(True)  # Default selected
+        self.summary_button.clicked.connect(lambda: self.show_analysis_content('summary'))
+        self.summary_button.setStyleSheet(oval_button_style)
+        
+        self.key_points_button.setCheckable(True)
+        self.key_points_button.clicked.connect(lambda: self.show_analysis_content('key_points'))
+        self.key_points_button.setStyleSheet(oval_button_style)
+        
+        self.actions_button.setCheckable(True)
+        self.actions_button.clicked.connect(lambda: self.show_analysis_content('actions'))
+        self.actions_button.setStyleSheet(oval_button_style)
+        
+        # Add buttons to layout
+        button_layout.addWidget(self.summary_button)
+        button_layout.addWidget(self.key_points_button)
+        button_layout.addWidget(self.actions_button)
+        button_layout.addStretch()
+        
+        analysis_layout.addWidget(button_container)
+        
+        # Content area
+        self.content_container = QWidget()
+        self.content_layout = QVBoxLayout(self.content_container)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Summary content
         self.summary_text = QTextEdit()
         self.summary_text.setPlainText("Summary will appear here after analysis...")
         self.summary_text.setReadOnly(True)
@@ -1787,47 +1856,53 @@ class VoiceTranscriberApp(QMainWindow):
             QTextEdit {
                 background: rgba(76, 175, 80, 0.1);
                 border: 1px solid rgba(76, 175, 80, 0.3);
-                border-radius: 6px;
-                padding: 10px;
+                border-radius: 8px;
+                padding: 15px;
                 color: #4CAF50;
                 font-size: 10pt;
             }
         """)
-        self.analysis_tabs.addTab(self.summary_text, "📋 Summary")
         
-        # Key points tab
+        # Key points content
         self.key_points_text = QTextEdit()
         self.key_points_text.setPlainText("Key points will appear here after analysis...")
         self.key_points_text.setReadOnly(True)
+        self.key_points_text.setVisible(False)
         self.key_points_text.setStyleSheet("""
             QTextEdit {
                 background: rgba(255, 193, 7, 0.1);
                 border: 1px solid rgba(255, 193, 7, 0.3);
-                border-radius: 6px;
-                padding: 10px;
+                border-radius: 8px;
+                padding: 15px;
                 color: #FFC107;
                 font-size: 10pt;
             }
         """)
-        self.analysis_tabs.addTab(self.key_points_text, "🔑 Key Points")
         
-        # Action items tab
+        # Action items content
         self.action_items_text = QTextEdit()
         self.action_items_text.setPlainText("Action items will appear here after analysis...")
         self.action_items_text.setReadOnly(True)
+        self.action_items_text.setVisible(False)
         self.action_items_text.setStyleSheet("""
             QTextEdit {
                 background: rgba(244, 67, 54, 0.1);
                 border: 1px solid rgba(244, 67, 54, 0.3);
-                border-radius: 6px;
-                padding: 10px;
+                border-radius: 8px;
+                padding: 15px;
                 color: #F44336;
                 font-size: 10pt;
             }
         """)
-        self.analysis_tabs.addTab(self.action_items_text, "✅ Actions")
         
-        right_layout.addWidget(self.analysis_tabs)
+        # Add all content areas to the container
+        self.content_layout.addWidget(self.summary_text)
+        self.content_layout.addWidget(self.key_points_text)
+        self.content_layout.addWidget(self.action_items_text)
+        
+        analysis_layout.addWidget(self.content_container)
+        
+        right_layout.addWidget(analysis_container)
         right_layout.addStretch()
         
         # Set dark theme with Spotify-inspired gradient
