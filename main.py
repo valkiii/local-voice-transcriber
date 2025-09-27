@@ -11,7 +11,7 @@ import whisper
 from scipy.io.wavfile import write
 import tempfile
 from collections import deque
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QGridLayout,
                            QWidget, QPushButton, QTextEdit, QLabel, QProgressBar,
                            QFileDialog, QComboBox, QGroupBox, QFrame, QMessageBox,
                            QTabWidget, QScrollArea, QDialog, QDialogButtonBox, 
@@ -1392,16 +1392,82 @@ class VoiceTranscriberApp(QMainWindow):
         # === RIGHT PANEL - AI Analysis ===
         analysis_title = QLabel("🤖 AI Analysis")
         analysis_title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
-        analysis_title.setStyleSheet("color: #ff00ff; margin-bottom: 10px;")
+        analysis_title.setStyleSheet("color: #ff00ff; margin-bottom: 15px;")
         right_layout.addWidget(analysis_title)
         
-        # Analysis controls
-        analysis_controls = QVBoxLayout()
+        # Grid layout for the action buttons and model selection
+        grid_widget = QWidget()
+        grid_layout = QGridLayout(grid_widget)
+        grid_layout.setSpacing(8)
+        grid_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Model selection
-        model_layout = QHBoxLayout()
+        # Position 1: Load Transcription (top-left)
+        self.load_button = QPushButton("📁 Load Transcription")
+        self.load_button.clicked.connect(self.load_transcription_file)
+        self.load_button.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #FF6B35, stop:1 #E55A2B);
+                color: white;
+                border: none;
+                padding: 10px;
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 9pt;
+                min-height: 40px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #FF7B45, stop:1 #F56A3B);
+            }
+        """)
+        grid_layout.addWidget(self.load_button, 0, 0)
+        
+        # Position 2: Analyze Content (top-center)
+        self.analyze_button = QPushButton("🧠 Analyze Content")
+        self.analyze_button.setEnabled(False)
+        self.analyze_button.clicked.connect(self.analyze_transcription)
+        self.analyze_button.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #4CAF50, stop:1 #45a049);
+                color: white;
+                border: none;
+                padding: 10px;
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 9pt;
+                min-height: 40px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #5CBF60, stop:1 #55b059);
+            }
+            QPushButton:disabled {
+                background: #666;
+                color: #999;
+            }
+        """)
+        grid_layout.addWidget(self.analyze_button, 0, 1)
+        
+        # Position 3: Model Selection (top-right) - 1.5x larger
+        model_container = QWidget()
+        model_container.setStyleSheet("""
+            QWidget {
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 8px;
+                padding: 8px;
+            }
+        """)
+        model_layout = QVBoxLayout(model_container)
+        model_layout.setContentsMargins(8, 8, 8, 8)
+        model_layout.setSpacing(5)
+        
         model_label = QLabel("Model:")
-        model_label.setFont(QFont("Segoe UI", 10))
+        model_label.setFont(QFont("Segoe UI", 9))
+        model_label.setStyleSheet("color: #ff00ff;")
+        model_layout.addWidget(model_label)
         
         self.model_combo = QComboBox()
         self.model_combo.addItem("Qwen2.5 1.5B (Fast)", "qwen2.5:1.5b")
@@ -1413,66 +1479,17 @@ class VoiceTranscriberApp(QMainWindow):
                 background: #2a2a2a;
                 border: 1px solid #555;
                 border-radius: 6px;
-                padding: 8px;
+                padding: 6px;
                 color: #ffffff;
-                font-size: 10pt;
+                font-size: 9pt;
             }
         """)
-        
-        model_layout.addWidget(model_label)
         model_layout.addWidget(self.model_combo)
-        analysis_controls.addLayout(model_layout)
         
-        # Analyze button
-        self.analyze_button = QPushButton("🧠 Analyze Content")
-        self.analyze_button.setEnabled(False)
-        self.analyze_button.clicked.connect(self.analyze_transcription)
-        self.analyze_button.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #4CAF50, stop:1 #45a049);
-                color: white;
-                border: none;
-                padding: 12px 20px;
-                border-radius: 8px;
-                font-weight: bold;
-                font-size: 11pt;
-                margin: 5px 0px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #5CBF60, stop:1 #55b059);
-            }
-            QPushButton:disabled {
-                background: #666;
-                color: #999;
-            }
-        """)
-        analysis_controls.addWidget(self.analyze_button)
+        # Add model container spanning 1.5x width (using column span)
+        grid_layout.addWidget(model_container, 0, 2, 1, 2)  # spans 2 columns for 1.5x effect
         
-        # Load transcription button
-        self.load_button = QPushButton("📁 Load Transcription")
-        self.load_button.clicked.connect(self.load_transcription_file)
-        self.load_button.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF6B35, stop:1 #E55A2B);
-                color: white;
-                border: none;
-                padding: 8px 15px;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 10pt;
-                margin: 2px 0px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF7B45, stop:1 #F56A3B);
-            }
-        """)
-        analysis_controls.addWidget(self.load_button)
-        
-        # Load audio file button
+        # Position 4: Load Audio File (bottom-left)
         self.load_audio_button = QPushButton("🎵 Load Audio File")
         self.load_audio_button.clicked.connect(self.load_audio_file)
         self.load_audio_button.setStyleSheet("""
@@ -1481,20 +1498,20 @@ class VoiceTranscriberApp(QMainWindow):
                     stop:0 #4CAF50, stop:1 #45a049);
                 color: white;
                 border: none;
-                padding: 8px 15px;
-                border-radius: 6px;
+                padding: 10px;
+                border-radius: 8px;
                 font-weight: bold;
-                font-size: 10pt;
-                margin: 2px 0px;
+                font-size: 9pt;
+                min-height: 40px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #5CBF60, stop:1 #55b059);
             }
         """)
-        analysis_controls.addWidget(self.load_audio_button)
+        grid_layout.addWidget(self.load_audio_button, 1, 0)
         
-        # Clean backup files button
+        # Position 5: Clean Backup Audio (bottom-center)
         self.clean_backup_button = QPushButton("🗑️ Clean Backup Audio")
         self.clean_backup_button.clicked.connect(self.clean_backup_audio)
         self.clean_backup_button.setStyleSheet("""
@@ -1503,18 +1520,41 @@ class VoiceTranscriberApp(QMainWindow):
                     stop:0 #FF5722, stop:1 #D84315);
                 color: white;
                 border: none;
-                padding: 8px 15px;
-                border-radius: 6px;
+                padding: 10px;
+                border-radius: 8px;
                 font-weight: bold;
-                font-size: 10pt;
-                margin: 2px 0px;
+                font-size: 9pt;
+                min-height: 40px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                     stop:0 #FF6B35, stop:1 #E55A2B);
             }
         """)
-        analysis_controls.addWidget(self.clean_backup_button)
+        grid_layout.addWidget(self.clean_backup_button, 1, 1)
+        
+        # Set column stretch ratios to accommodate 1.5x model selection
+        grid_layout.setColumnStretch(0, 2)  # Load Transcription
+        grid_layout.setColumnStretch(1, 2)  # Analyze Content
+        grid_layout.setColumnStretch(2, 2)  # Model Selection part 1
+        grid_layout.setColumnStretch(3, 1)  # Model Selection part 2 (total 3 for 1.5x effect)
+        
+        right_layout.addWidget(grid_widget)
+        
+        # Settings/Diarization card
+        settings_card = QWidget()
+        settings_card.setStyleSheet("""
+            QWidget {
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 8px;
+                padding: 15px;
+                margin-bottom: 10px;
+            }
+        """)
+        settings_layout = QVBoxLayout(settings_card)
+        settings_layout.setContentsMargins(10, 10, 10, 10)
+        settings_layout.setSpacing(10)
         
         # Diarization controls
         diarization_layout = QHBoxLayout()
@@ -1555,11 +1595,10 @@ class VoiceTranscriberApp(QMainWindow):
                     stop:0 #9C27B0, stop:1 #7B1FA2);
                 color: white;
                 border: none;
-                padding: 6px 12px;
+                padding: 8px 12px;
                 border-radius: 6px;
                 font-weight: bold;
                 font-size: 9pt;
-                margin: 2px 0px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1574,19 +1613,19 @@ class VoiceTranscriberApp(QMainWindow):
         diarization_layout.addWidget(self.diarization_checkbox)
         diarization_layout.addStretch()
         diarization_layout.addWidget(self.edit_speakers_button)
-        analysis_controls.addLayout(diarization_layout)
+        settings_layout.addLayout(diarization_layout)
         
         # Status label
         status_text = "Ready for analysis"
         if not DIARIZATION_AVAILABLE:
-            status_text += " • Speaker diarization unavailable (install pyannote.audio)"
+            status_text += " • Speaker diarization unavailable (requires Hugging Face authentication)"
         self.analysis_status = QLabel(status_text)
         self.analysis_status.setFont(QFont("Segoe UI", 9))
-        self.analysis_status.setStyleSheet("color: #888; margin-bottom: 10px;")
+        self.analysis_status.setStyleSheet("color: #888; margin-top: 5px;")
         self.analysis_status.setWordWrap(True)
-        analysis_controls.addWidget(self.analysis_status)
+        settings_layout.addWidget(self.analysis_status)
         
-        right_layout.addLayout(analysis_controls)
+        right_layout.addWidget(settings_card)
         
         # Analysis results tabs
         self.analysis_tabs = QTabWidget()
