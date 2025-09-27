@@ -1801,13 +1801,15 @@ class VoiceTranscriberApp(QMainWindow):
             QPushButton {
                 background: #3a3a3a;
                 border: 1px solid #555;
-                border-radius: 20px;
-                padding: 8px 16px;
+                border-radius: 25px;
+                padding: 10px 20px;
                 color: #ffffff;
                 font-size: 9pt;
                 font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
                 font-weight: bold;
-                min-width: 80px;
+                min-width: 90px;
+                max-height: 50px;
+                min-height: 50px;
             }
             QPushButton:hover {
                 background: #4a4a4a;
