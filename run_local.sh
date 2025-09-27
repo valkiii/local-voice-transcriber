@@ -13,7 +13,7 @@ source venv/bin/activate
 
 # Install dependencies
 echo "Installing dependencies..."
-pip install -r requirements.txt
+pip install -r requirements.txt --quiet
 
 # Run the app
 echo "Starting Voice Transcriber..."
