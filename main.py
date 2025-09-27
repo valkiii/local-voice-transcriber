@@ -1254,6 +1254,115 @@ class VoiceTranscriberApp(QMainWindow):
             print(f"Failed to load Whisper model: {e}")
             self.shared_whisper_model = None
         
+    def create_custom_dropdown(self):
+        """Create a custom dropdown widget that mimics the React component"""
+        dropdown_widget = QWidget()
+        dropdown_layout = QVBoxLayout(dropdown_widget)
+        dropdown_layout.setContentsMargins(0, 0, 0, 0)
+        dropdown_layout.setSpacing(4)
+        
+        # Create the main button with arrow
+        self.dropdown_button = QPushButton("Qwen2.5 1.5B (Fast)  ▼")
+        self.dropdown_button.setCheckable(True)
+        self.dropdown_button.clicked.connect(self.toggle_dropdown)
+        
+        # Style the main button
+        self.dropdown_button.setStyleSheet("""
+            QPushButton {
+                background: #2a2a2a;
+                border: 1px solid #555;
+                border-radius: 8px;
+                padding: 8px 12px;
+                color: #ffffff;
+                font-size: 10pt;
+                font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
+                text-align: left;
+                min-height: 16px;
+            }
+            QPushButton:hover {
+                background: #3a3a3a;
+                border: 1px solid #777;
+            }
+            QPushButton:checked {
+                background: #3a3a3a;
+                border: 1px solid #777;
+            }
+        """)
+        
+        # Create dropdown options container
+        self.dropdown_options = QWidget()
+        self.dropdown_options.setVisible(False)
+        self.dropdown_options.setStyleSheet("""
+            QWidget {
+                background: #2a2a2a;
+                border: 1px solid #555;
+                border-radius: 8px;
+                margin-top: 2px;
+            }
+        """)
+        
+        options_layout = QVBoxLayout(self.dropdown_options)
+        options_layout.setContentsMargins(4, 4, 4, 4)
+        options_layout.setSpacing(2)
+        
+        # Create option buttons
+        self.model_options = [
+            ("Qwen2.5 1.5B (Fast)", "qwen2.5:1.5b"),
+            ("Gemma2 2B (Fastest)", "gemma2:2b"),
+            ("Keyword Analysis (No Download)", "keyword-only")
+        ]
+        
+        self.option_buttons = []
+        for option_text, option_value in self.model_options:
+            option_btn = QPushButton(option_text)
+            option_btn.setStyleSheet("""
+                QPushButton {
+                    background: transparent;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 8px 12px;
+                    color: #ffffff;
+                    font-size: 10pt;
+                    font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
+                    text-align: left;
+                }
+                QPushButton:hover {
+                    background: #3a3a3a;
+                }
+            """)
+            option_btn.clicked.connect(lambda checked, text=option_text, value=option_value: self.select_model_option(text, value))
+            options_layout.addWidget(option_btn)
+            self.option_buttons.append(option_btn)
+        
+        dropdown_layout.addWidget(self.dropdown_button)
+        dropdown_layout.addWidget(self.dropdown_options)
+        
+        # Store current selection
+        self.current_model = "qwen2.5:1.5b"
+        
+        return dropdown_widget
+    
+    def toggle_dropdown(self):
+        """Toggle the dropdown visibility"""
+        is_visible = self.dropdown_options.isVisible()
+        self.dropdown_options.setVisible(not is_visible)
+        self.dropdown_button.setChecked(not is_visible)
+    
+    def select_model_option(self, text, value):
+        """Handle model selection"""
+        self.dropdown_button.setText(f"{text}  ▼")
+        self.current_model = value
+        self.dropdown_options.setVisible(False)
+        self.dropdown_button.setChecked(False)
+        
+        # Call the original model change handler
+        self.on_model_changed_custom(value)
+    
+    def on_model_changed_custom(self, model_value):
+        """Handle model change for custom dropdown"""
+        self.selected_model = model_value
+        self.analysis_status.setText(f"Ready for analysis with {model_value.split('/')[-1]}")
+        
     def init_ui(self):
         self.setWindowTitle("Voice Transcriber with AI Analysis")
         self.setGeometry(100, 100, 1200, 800)
@@ -1477,90 +1586,12 @@ class VoiceTranscriberApp(QMainWindow):
         
         model_label = QLabel("Model:")
         model_label.setFont(QFont("Circular", 9))
-        model_label.setStyleSheet("color: #ff00ff; font-family: 'Circular', 'SF Pro Display', 'Segoe UI', sans-serif; background: transparent; border: none;")
+        model_label.setStyleSheet("color: #ff69b4; font-family: 'Circular', 'SF Pro Display', 'Segoe UI', sans-serif; background: transparent; border: none; margin-bottom: 4px;")
         model_layout.addWidget(model_label)
         
-        self.model_combo = QComboBox()
-        self.model_combo.addItem("Qwen2.5 1.5B (Fast)", "qwen2.5:1.5b")
-        self.model_combo.addItem("Gemma2 2B (Fastest)", "gemma2:2b")
-        self.model_combo.addItem("Keyword Analysis (No Download)", "keyword-only")
-        self.model_combo.currentIndexChanged.connect(self.on_model_changed)
-        
-        # Make dropdown appear directly below the combo box
-        self.model_combo.view().setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.model_combo.setMaxVisibleItems(3)
-        self.model_combo.setStyleSheet("""
-            QComboBox {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1c1c1c, stop:1 #0f0f0f);
-                border: 1px solid rgba(139, 69, 139, 0.3);
-                border-radius: 8px;
-                padding: 8px 12px;
-                color: #ffffff;
-                font-size: 10pt;
-                font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
-                min-height: 16px;
-            }
-            QComboBox:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #2c2c2c, stop:1 #1f1f1f);
-                border: 1px solid rgba(139, 69, 139, 0.5);
-            }
-            QComboBox:focus {
-                border: 1px solid rgba(139, 69, 139, 0.7);
-            }
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 20px;
-                border: none;
-                border-top-right-radius: 8px;
-                border-bottom-right-radius: 8px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border: 2px solid #888;
-                border-color: transparent transparent #888 transparent;
-                width: 0px;
-                height: 0px;
-                margin: 2px;
-            }
-            QComboBox::down-arrow:hover {
-                border-color: transparent transparent #aaa transparent;
-            }
-            QComboBox QAbstractItemView {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #1c1c1c, stop:1 #0f0f0f);
-                border: 1px solid rgba(139, 69, 139, 0.4);
-                border-radius: 8px;
-                color: #ffffff;
-                selection-background-color: rgba(70, 70, 70, 0.8);
-                selection-color: #ffffff;
-                font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
-                outline: none;
-                font-size: 10pt;
-                padding: 2px;
-            }
-            QComboBox QAbstractItemView::item {
-                padding: 10px 12px;
-                border: none;
-                border-radius: 6px;
-                margin: 2px;
-                color: #ffffff;
-                background: transparent;
-            }
-            QComboBox QAbstractItemView::item:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(70, 70, 70, 0.6), stop:1 rgba(50, 50, 50, 0.8));
-                color: #ffffff;
-            }
-            QComboBox QAbstractItemView::item:selected {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(90, 90, 90, 0.8), stop:1 rgba(70, 70, 70, 0.9));
-                color: #ffffff;
-            }
-        """)
-        model_layout.addWidget(self.model_combo)
+        # Create custom dropdown widget
+        self.custom_dropdown = self.create_custom_dropdown()
+        model_layout.addWidget(self.custom_dropdown)
         
         # Add model container spanning 1.5x width (using column span)
         grid_layout.addWidget(model_container, 0, 2, 1, 2)  # spans 2 columns for 1.5x effect
