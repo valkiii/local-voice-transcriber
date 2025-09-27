@@ -1289,17 +1289,20 @@ class VoiceTranscriberApp(QMainWindow):
             }
         """)
         
-        # Create dropdown options container
-        self.dropdown_options = QWidget()
+        # Create dropdown options container as overlay
+        self.dropdown_options = QWidget(dropdown_widget)
         self.dropdown_options.setVisible(False)
         self.dropdown_options.setStyleSheet("""
             QWidget {
                 background: #2a2a2a;
                 border: 1px solid #555;
                 border-radius: 8px;
-                margin-top: 2px;
             }
         """)
+        
+        # Position it as an overlay (absolute positioning)
+        self.dropdown_options.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
+        self.dropdown_options.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         
         options_layout = QVBoxLayout(self.dropdown_options)
         options_layout.setContentsMargins(4, 4, 4, 4)
@@ -1335,7 +1338,7 @@ class VoiceTranscriberApp(QMainWindow):
             self.option_buttons.append(option_btn)
         
         dropdown_layout.addWidget(self.dropdown_button)
-        dropdown_layout.addWidget(self.dropdown_options)
+        # Don't add dropdown_options to layout - it's positioned as overlay
         
         # Store current selection
         self.current_model = "qwen2.5:1.5b"
@@ -1345,14 +1348,23 @@ class VoiceTranscriberApp(QMainWindow):
     def toggle_dropdown(self):
         """Toggle the dropdown visibility"""
         is_visible = self.dropdown_options.isVisible()
-        self.dropdown_options.setVisible(not is_visible)
-        self.dropdown_button.setChecked(not is_visible)
+        
+        if not is_visible:
+            # Position the dropdown below the button
+            button_pos = self.dropdown_button.mapToGlobal(self.dropdown_button.rect().bottomLeft())
+            self.dropdown_options.move(button_pos.x(), button_pos.y() + 4)
+            self.dropdown_options.resize(self.dropdown_button.width(), self.dropdown_options.sizeHint().height())
+            self.dropdown_options.show()
+            self.dropdown_button.setChecked(True)
+        else:
+            self.dropdown_options.hide()
+            self.dropdown_button.setChecked(False)
     
     def select_model_option(self, text, value):
         """Handle model selection"""
         self.dropdown_button.setText(f"{text}  ▼")
         self.current_model = value
-        self.dropdown_options.setVisible(False)
+        self.dropdown_options.hide()
         self.dropdown_button.setChecked(False)
         
         # Call the original model change handler
