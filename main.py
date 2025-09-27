@@ -1495,6 +1495,39 @@ class VoiceTranscriberApp(QMainWindow):
                 font-size: 9pt;
                 font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
             }
+            QComboBox:hover {
+                background: #3a3a3a;
+                border: 1px solid #777;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background: #2a2a2a;
+                border: 1px solid #555;
+                border-radius: 6px;
+                color: #ffffff;
+                selection-background-color: #4a4a4a;
+                selection-color: #ffffff;
+                font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
+                outline: none;
+            }
+            QComboBox QAbstractItemView::item {
+                padding: 8px;
+                border: none;
+                min-height: 20px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background: #4a4a4a;
+            }
+            QComboBox QAbstractItemView::item:selected {
+                background: #5a5a5a;
+            }
         """)
         model_layout.addWidget(self.model_combo)
         
