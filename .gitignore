@@ -34,3 +34,17 @@ Thumbs.db
 # Temporary files
 temp_*
 *.tmp
+
+# Build artifacts and archives
+*.zip
+*.tar.gz
+*.dmg
+*.exe
+
+# Old versions and backups
+*_old.*
+*_backup.*
+main_*.py
+
+# Claude Code settings
+.claude/settings.local.json
