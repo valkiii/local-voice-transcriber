@@ -1391,79 +1391,84 @@ class VoiceTranscriberApp(QMainWindow):
         
         # === RIGHT PANEL - AI Analysis ===
         analysis_title = QLabel("🤖 AI Analysis")
-        analysis_title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
-        analysis_title.setStyleSheet("color: #ff00ff; margin-bottom: 15px;")
+        analysis_title.setFont(QFont("Circular", 16, QFont.Weight.Bold))
+        analysis_title.setStyleSheet("color: #ff00ff; margin-bottom: 15px; font-family: 'Circular', 'SF Pro Display', 'Segoe UI', sans-serif;")
         right_layout.addWidget(analysis_title)
         
         # Grid layout for the action buttons and model selection
         grid_widget = QWidget()
         grid_layout = QGridLayout(grid_widget)
-        grid_layout.setSpacing(8)
+        grid_layout.setSpacing(12)  # Increased spacing for better card separation
         grid_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Position 1: Load Transcription (top-left)
+        # Position 1: Load Transcription (top-left) - Green accent for loading
         self.load_button = QPushButton("📁 Load Transcription")
         self.load_button.clicked.connect(self.load_transcription_file)
         self.load_button.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 107, 53, 0.85), stop:1 rgba(229, 90, 43, 0.85));
-                color: white;
-                border: none;
-                padding: 12px;
-                border-radius: 12px;
+                    stop:0 rgba(45, 85, 45, 0.9), stop:1 rgba(35, 65, 35, 0.9));
+                color: #e8f5e8;
+                border: 1px solid rgba(76, 175, 80, 0.3);
+                padding: 15px;
+                border-radius: 16px;
                 font-weight: bold;
-                font-size: 9pt;
-                min-height: 45px;
+                font-size: 10pt;
+                font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
+                min-height: 50px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 123, 69, 0.95), stop:1 rgba(245, 106, 59, 0.95));
+                    stop:0 rgba(55, 95, 55, 0.95), stop:1 rgba(45, 75, 45, 0.95));
+                border: 1px solid rgba(76, 175, 80, 0.5);
             }
         """)
         grid_layout.addWidget(self.load_button, 0, 0)
         
-        # Position 2: Analyze Content (top-center)
+        # Position 2: Analyze Content (top-center) - Purple accent for analysis
         self.analyze_button = QPushButton("🧠 Analyze Content")
         self.analyze_button.setEnabled(False)
         self.analyze_button.clicked.connect(self.analyze_transcription)
         self.analyze_button.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(76, 175, 80, 0.85), stop:1 rgba(69, 160, 73, 0.85));
-                color: white;
-                border: none;
-                padding: 12px;
-                border-radius: 12px;
+                    stop:0 rgba(85, 45, 95, 0.9), stop:1 rgba(65, 35, 75, 0.9));
+                color: #f0e8f5;
+                border: 1px solid rgba(156, 39, 176, 0.3);
+                padding: 15px;
+                border-radius: 16px;
                 font-weight: bold;
-                font-size: 9pt;
-                min-height: 45px;
+                font-size: 10pt;
+                font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
+                min-height: 50px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(92, 191, 96, 0.95), stop:1 rgba(85, 176, 89, 0.95));
+                    stop:0 rgba(95, 55, 105, 0.95), stop:1 rgba(75, 45, 85, 0.95));
+                border: 1px solid rgba(156, 39, 176, 0.5);
             }
             QPushButton:disabled {
-                background: rgba(102, 102, 102, 0.6);
-                color: rgba(153, 153, 153, 0.8);
+                background: rgba(45, 45, 45, 0.7);
+                color: rgba(120, 120, 120, 0.8);
+                border: 1px solid rgba(80, 80, 80, 0.3);
             }
         """)
         grid_layout.addWidget(self.analyze_button, 0, 1)
         
-        # Position 3: Model Selection (top-right) - 1.5x larger
+        # Position 3: Model Selection (top-right) - 1.5x larger with neutral tinting
         model_container = QWidget()
         model_container.setStyleSheet("""
             QWidget {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(45, 45, 45, 0.8), stop:1 rgba(35, 35, 35, 0.8));
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                border-radius: 12px;
-                padding: 12px;
+                    stop:0 rgba(55, 50, 45, 0.9), stop:1 rgba(45, 40, 35, 0.9));
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                border-radius: 16px;
+                padding: 15px;
             }
             QWidget:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(55, 55, 55, 0.9), stop:1 rgba(45, 45, 45, 0.9));
-                border: 1px solid rgba(255, 255, 255, 0.25);
+                    stop:0 rgba(65, 60, 55, 0.95), stop:1 rgba(55, 50, 45, 0.95));
+                border: 1px solid rgba(255, 255, 255, 0.3);
             }
         """)
         model_layout = QVBoxLayout(model_container)
@@ -1471,8 +1476,8 @@ class VoiceTranscriberApp(QMainWindow):
         model_layout.setSpacing(5)
         
         model_label = QLabel("Model:")
-        model_label.setFont(QFont("Segoe UI", 9))
-        model_label.setStyleSheet("color: #ff00ff;")
+        model_label.setFont(QFont("Circular", 9))
+        model_label.setStyleSheet("color: #ff00ff; font-family: 'Circular', 'SF Pro Display', 'Segoe UI', sans-serif;")
         model_layout.addWidget(model_label)
         
         self.model_combo = QComboBox()
@@ -1488,6 +1493,7 @@ class VoiceTranscriberApp(QMainWindow):
                 padding: 6px;
                 color: #ffffff;
                 font-size: 9pt;
+                font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
             }
         """)
         model_layout.addWidget(self.model_combo)
@@ -1495,46 +1501,50 @@ class VoiceTranscriberApp(QMainWindow):
         # Add model container spanning 1.5x width (using column span)
         grid_layout.addWidget(model_container, 0, 2, 1, 2)  # spans 2 columns for 1.5x effect
         
-        # Position 4: Load Audio File (bottom-left)
+        # Position 4: Load Audio File (bottom-left) - Green accent for loading
         self.load_audio_button = QPushButton("🎵 Load Audio File")
         self.load_audio_button.clicked.connect(self.load_audio_file)
         self.load_audio_button.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(76, 175, 80, 0.85), stop:1 rgba(69, 160, 73, 0.85));
-                color: white;
-                border: none;
-                padding: 12px;
-                border-radius: 12px;
+                    stop:0 rgba(45, 85, 45, 0.9), stop:1 rgba(35, 65, 35, 0.9));
+                color: #e8f5e8;
+                border: 1px solid rgba(76, 175, 80, 0.3);
+                padding: 15px;
+                border-radius: 16px;
                 font-weight: bold;
-                font-size: 9pt;
-                min-height: 45px;
+                font-size: 10pt;
+                font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
+                min-height: 50px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(92, 191, 96, 0.95), stop:1 rgba(85, 176, 89, 0.95));
+                    stop:0 rgba(55, 95, 55, 0.95), stop:1 rgba(45, 75, 45, 0.95));
+                border: 1px solid rgba(76, 175, 80, 0.5);
             }
         """)
         grid_layout.addWidget(self.load_audio_button, 1, 0)
         
-        # Position 5: Clean Backup Audio (bottom-center)
+        # Position 5: Clean Backup Audio (bottom-center) - Orange accent for deleting
         self.clean_backup_button = QPushButton("🗑️ Clean Backup Audio")
         self.clean_backup_button.clicked.connect(self.clean_backup_audio)
         self.clean_backup_button.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 87, 34, 0.85), stop:1 rgba(216, 67, 21, 0.85));
-                color: white;
-                border: none;
-                padding: 12px;
-                border-radius: 12px;
+                    stop:0 rgba(95, 55, 35, 0.9), stop:1 rgba(75, 45, 25, 0.9));
+                color: #fff5e8;
+                border: 1px solid rgba(255, 152, 0, 0.3);
+                padding: 15px;
+                border-radius: 16px;
                 font-weight: bold;
-                font-size: 9pt;
-                min-height: 45px;
+                font-size: 10pt;
+                font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
+                min-height: 50px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(255, 107, 53, 0.95), stop:1 rgba(229, 90, 43, 0.95));
+                    stop:0 rgba(105, 65, 45, 0.95), stop:1 rgba(85, 55, 35, 0.95));
+                border: 1px solid rgba(255, 152, 0, 0.5);
             }
         """)
         grid_layout.addWidget(self.clean_backup_button, 1, 1)
@@ -1552,16 +1562,16 @@ class VoiceTranscriberApp(QMainWindow):
         settings_card.setStyleSheet("""
             QWidget {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(45, 45, 45, 0.8), stop:1 rgba(35, 35, 35, 0.8));
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                border-radius: 12px;
+                    stop:0 rgba(55, 50, 45, 0.9), stop:1 rgba(45, 40, 35, 0.9));
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                border-radius: 16px;
                 padding: 18px;
                 margin-bottom: 15px;
             }
             QWidget:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(55, 55, 55, 0.9), stop:1 rgba(45, 45, 45, 0.9));
-                border: 1px solid rgba(255, 255, 255, 0.25);
+                    stop:0 rgba(65, 60, 55, 0.95), stop:1 rgba(55, 50, 45, 0.95));
+                border: 1px solid rgba(255, 255, 255, 0.3);
             }
         """)
         settings_layout = QVBoxLayout(settings_card)
