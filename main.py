@@ -1489,6 +1489,10 @@ class VoiceTranscriberApp(QMainWindow):
         # Make dropdown appear directly below the combo box
         self.model_combo.view().setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.model_combo.setMaxVisibleItems(3)
+        
+        # Force dropdown to appear attached to the combo box
+        self.model_combo.view().setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.model_combo.view().setAutoFillBackground(True)
         self.model_combo.setStyleSheet("""
             QComboBox {
                 background: #2a2a2a;
@@ -1503,6 +1507,12 @@ class VoiceTranscriberApp(QMainWindow):
                 background: #3a3a3a;
                 border: 1px solid #777;
             }
+            QComboBox:on {
+                background: #2a2a2a;
+                border: 1px solid #555;
+                border-radius: 6px 6px 0px 0px;
+                border-bottom: none;
+            }
             QComboBox::drop-down {
                 border: none;
                 width: 20px;
@@ -1514,7 +1524,7 @@ class VoiceTranscriberApp(QMainWindow):
             QComboBox QAbstractItemView {
                 background: #2a2a2a;
                 border: 1px solid #555;
-                border-radius: 0px;
+                border-radius: 0px 0px 6px 6px;
                 border-top: none;
                 color: #ffffff;
                 selection-background-color: #4a4a4a;
@@ -1522,6 +1532,7 @@ class VoiceTranscriberApp(QMainWindow):
                 font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
                 outline: none;
                 show-decoration-selected: 1;
+                margin-top: -1px;
             }
             QComboBox QAbstractItemView::item {
                 padding: 8px;
