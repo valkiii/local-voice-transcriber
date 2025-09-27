@@ -1407,18 +1407,18 @@ class VoiceTranscriberApp(QMainWindow):
         self.load_button.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF6B35, stop:1 #E55A2B);
+                    stop:0 rgba(255, 107, 53, 0.85), stop:1 rgba(229, 90, 43, 0.85));
                 color: white;
                 border: none;
-                padding: 10px;
-                border-radius: 8px;
+                padding: 12px;
+                border-radius: 12px;
                 font-weight: bold;
                 font-size: 9pt;
-                min-height: 40px;
+                min-height: 45px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF7B45, stop:1 #F56A3B);
+                    stop:0 rgba(255, 123, 69, 0.95), stop:1 rgba(245, 106, 59, 0.95));
             }
         """)
         grid_layout.addWidget(self.load_button, 0, 0)
@@ -1430,22 +1430,22 @@ class VoiceTranscriberApp(QMainWindow):
         self.analyze_button.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #4CAF50, stop:1 #45a049);
+                    stop:0 rgba(76, 175, 80, 0.85), stop:1 rgba(69, 160, 73, 0.85));
                 color: white;
                 border: none;
-                padding: 10px;
-                border-radius: 8px;
+                padding: 12px;
+                border-radius: 12px;
                 font-weight: bold;
                 font-size: 9pt;
-                min-height: 40px;
+                min-height: 45px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #5CBF60, stop:1 #55b059);
+                    stop:0 rgba(92, 191, 96, 0.95), stop:1 rgba(85, 176, 89, 0.95));
             }
             QPushButton:disabled {
-                background: #666;
-                color: #999;
+                background: rgba(102, 102, 102, 0.6);
+                color: rgba(153, 153, 153, 0.8);
             }
         """)
         grid_layout.addWidget(self.analyze_button, 0, 1)
@@ -1454,10 +1454,16 @@ class VoiceTranscriberApp(QMainWindow):
         model_container = QWidget()
         model_container.setStyleSheet("""
             QWidget {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 8px;
-                padding: 8px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(45, 45, 45, 0.8), stop:1 rgba(35, 35, 35, 0.8));
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 12px;
+                padding: 12px;
+            }
+            QWidget:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(55, 55, 55, 0.9), stop:1 rgba(45, 45, 45, 0.9));
+                border: 1px solid rgba(255, 255, 255, 0.25);
             }
         """)
         model_layout = QVBoxLayout(model_container)
@@ -1495,18 +1501,18 @@ class VoiceTranscriberApp(QMainWindow):
         self.load_audio_button.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #4CAF50, stop:1 #45a049);
+                    stop:0 rgba(76, 175, 80, 0.85), stop:1 rgba(69, 160, 73, 0.85));
                 color: white;
                 border: none;
-                padding: 10px;
-                border-radius: 8px;
+                padding: 12px;
+                border-radius: 12px;
                 font-weight: bold;
                 font-size: 9pt;
-                min-height: 40px;
+                min-height: 45px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #5CBF60, stop:1 #55b059);
+                    stop:0 rgba(92, 191, 96, 0.95), stop:1 rgba(85, 176, 89, 0.95));
             }
         """)
         grid_layout.addWidget(self.load_audio_button, 1, 0)
@@ -1517,18 +1523,18 @@ class VoiceTranscriberApp(QMainWindow):
         self.clean_backup_button.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF5722, stop:1 #D84315);
+                    stop:0 rgba(255, 87, 34, 0.85), stop:1 rgba(216, 67, 21, 0.85));
                 color: white;
                 border: none;
-                padding: 10px;
-                border-radius: 8px;
+                padding: 12px;
+                border-radius: 12px;
                 font-weight: bold;
                 font-size: 9pt;
-                min-height: 40px;
+                min-height: 45px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF6B35, stop:1 #E55A2B);
+                    stop:0 rgba(255, 107, 53, 0.95), stop:1 rgba(229, 90, 43, 0.95));
             }
         """)
         grid_layout.addWidget(self.clean_backup_button, 1, 1)
@@ -1545,11 +1551,17 @@ class VoiceTranscriberApp(QMainWindow):
         settings_card = QWidget()
         settings_card.setStyleSheet("""
             QWidget {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 8px;
-                padding: 15px;
-                margin-bottom: 10px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(45, 45, 45, 0.8), stop:1 rgba(35, 35, 35, 0.8));
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 12px;
+                padding: 18px;
+                margin-bottom: 15px;
+            }
+            QWidget:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(55, 55, 55, 0.9), stop:1 rgba(45, 45, 45, 0.9));
+                border: 1px solid rgba(255, 255, 255, 0.25);
             }
         """)
         settings_layout = QVBoxLayout(settings_card)
@@ -1701,15 +1713,17 @@ class VoiceTranscriberApp(QMainWindow):
         right_layout.addWidget(self.analysis_tabs)
         right_layout.addStretch()
         
-        # Set dark theme
+        # Set dark theme with Spotify-inspired gradient
         self.setStyleSheet("""
+            /* Spotify-Inspired Dynamic Gradient Background */
             QMainWindow {
-                background-color: #0a0a0a;
-                color: #ff00ff;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1a0f0d, stop:0.3 #2d1b16, stop:0.7 #3d261f, stop:1 #4a3026);
+                color: #ffffff;
             }
-            QWidget {
-                background-color: #0a0a0a;
-                color: #ff00ff;
+            QMainWindow > QWidget {
+                background: transparent;
+                color: #ffffff;
             }
             QLabel {
                 color: #ff00ff;

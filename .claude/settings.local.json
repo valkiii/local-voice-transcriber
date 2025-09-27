@@ -20,7 +20,11 @@
       "WebFetch(domain:github.com)",
       "Bash(git push:*)",
       "Bash(sed:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(ollama list:*)",
+      "Bash(ollama pull:*)",
+      "Bash(git rm:*)",
+      "Bash(git restore:*)"
     ],
     "deny": [],
     "ask": [],
