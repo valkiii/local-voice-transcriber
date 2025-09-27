@@ -1491,51 +1491,72 @@ class VoiceTranscriberApp(QMainWindow):
         self.model_combo.setMaxVisibleItems(3)
         self.model_combo.setStyleSheet("""
             QComboBox {
-                background: #2a2a2a;
-                border: 1px solid #555;
-                border-radius: 6px;
-                padding: 6px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1c1c1c, stop:1 #0f0f0f);
+                border: 1px solid rgba(139, 69, 139, 0.3);
+                border-radius: 8px;
+                padding: 8px 12px;
                 color: #ffffff;
-                font-size: 9pt;
+                font-size: 10pt;
                 font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
+                min-height: 16px;
             }
             QComboBox:hover {
-                background: #3a3a3a;
-                border: 1px solid #777;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #2c2c2c, stop:1 #1f1f1f);
+                border: 1px solid rgba(139, 69, 139, 0.5);
+            }
+            QComboBox:focus {
+                border: 1px solid rgba(139, 69, 139, 0.7);
             }
             QComboBox::drop-down {
-                border: none;
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
                 width: 20px;
+                border: none;
+                border-top-right-radius: 8px;
+                border-bottom-right-radius: 8px;
             }
             QComboBox::down-arrow {
                 image: none;
-                border: none;
+                border: 2px solid #888;
+                border-color: transparent transparent #888 transparent;
+                width: 0px;
+                height: 0px;
+                margin: 2px;
+            }
+            QComboBox::down-arrow:hover {
+                border-color: transparent transparent #aaa transparent;
             }
             QComboBox QAbstractItemView {
-                background-color: #2a2a2a;
-                border: 1px solid #555;
-                border-radius: 6px;
-                border-top: 1px solid #555;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1c1c1c, stop:1 #0f0f0f);
+                border: 1px solid rgba(139, 69, 139, 0.4);
+                border-radius: 8px;
                 color: #ffffff;
-                selection-background-color: #4a4a4a;
+                selection-background-color: rgba(70, 70, 70, 0.8);
                 selection-color: #ffffff;
                 font-family: "Circular", "SF Pro Display", "Segoe UI", sans-serif;
                 outline: none;
-                font-size: 9pt;
+                font-size: 10pt;
+                padding: 2px;
             }
             QComboBox QAbstractItemView::item {
-                padding: 8px;
+                padding: 10px 12px;
                 border: none;
-                min-height: 20px;
+                border-radius: 6px;
+                margin: 2px;
                 color: #ffffff;
-                background-color: transparent;
+                background: transparent;
             }
             QComboBox QAbstractItemView::item:hover {
-                background-color: #4a4a4a;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(70, 70, 70, 0.6), stop:1 rgba(50, 50, 50, 0.8));
                 color: #ffffff;
             }
             QComboBox QAbstractItemView::item:selected {
-                background-color: #5a5a5a;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(90, 90, 90, 0.8), stop:1 rgba(70, 70, 70, 0.9));
                 color: #ffffff;
             }
         """)
